@@ -1,0 +1,77 @@
+[project]
+authors = [{ name = "Srijit Seal" }]
+dependencies = [
+    "pandas>=2.2,<3",
+    "numpy>=1.26,<3",
+    "scikit-learn>=1.5,<2",
+    "matplotlib>=3.9,<4",
+    "seaborn>=0.13,<0.14",
+    "loguru>=0.7,<0.8",
+    "typer>=0.12,<1",
+    "ipykernel>=6.29,<8",
+]
+name = "polaris_generalization"
+requires-python = ">= 3.11"
+version = "0.1.0"
+
+[build-system]
+build-backend = "hatchling.build"
+requires = ["hatchling"]
+
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "linux-64"]
+
+[tool.pixi.pypi-dependencies]
+polaris_generalization = { path = ".", editable = true }
+
+[tool.pixi.tasks]
+
+[tool.pixi.dependencies]
+python = "3.12.*"
+
+# Feature: Cheminformatics (rdkit via conda)
+[tool.pixi.feature.cheminformatics]
+platforms = ["osx-arm64", "linux-64"]
+
+[tool.pixi.feature.cheminformatics.dependencies]
+python = "3.12.*"
+rdkit = "*"
+numpy = "*"
+pandas = "*"
+matplotlib = "*"
+seaborn = "*"
+scikit-learn = "*"
+typer = "*"
+loguru = "*"
+
+[tool.pixi.feature.cheminformatics.activation]
+env = { PYTHONPATH = "src" }
+
+[tool.pixi.environments]
+default = { solve-group = "default" }
+lint = { features = ["lint"], solve-group = "default" }
+test = { features = ["test"], solve-group = "default" }
+cheminformatics = { features = ["cheminformatics"], no-default-feature = true }
+
+[dependency-groups]
+lint = ["ruff>=0.8.0"]
+test = ["pytest>=8.0.0"]
+
+[tool.ruff]
+line-length = 120
+src = ["src"]
+target-version = "py312"
+include = ["pyproject.toml", "src/**/*.py", "notebooks/**/*.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "W"]
+ignore = [
+    "E501", # Line too long (handled by formatter)
+    "N803", # Argument name should be lowercase (ML convention: X, Y for matrices)
+    "N806", # Variable in function should be lowercase (ML convention: X_train, X_test)
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
