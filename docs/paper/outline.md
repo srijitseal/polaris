@@ -2,89 +2,257 @@
 
 ## Central Contribution
 
-A framework for evaluating molecular ML generalization using realistic ADMET data, demonstrating that standard random-split benchmarks systematically overestimate real-world performance.
+Chemical datasets are full of non-obvious biases (spurious correlations) and the chemical coverage of current benchmarks is extremely limited. Together, these lead to inflated performance measures that do not account for generalization. We provide a framework of industry-informed case studies for critically evaluating and reporting molecular ML model strengths and weaknesses, demonstrated on a realistic ADMET dataset from actual drug discovery campaigns.
+
+## Framing
+
+This paper sits between a review and an opinion paper. Instead of prescriptive "if-this-then-that" guidelines (like the decision tree in the Polaris Method Comparison preprint), we center on a **collection of case studies** in model validation — extending beyond dataset splitting to include model interpretability. The common thread: standard evaluation systematically overestimates real-world performance.
 
 ## Abstract (5 sentences)
 
-1. **Opportunity**: Machine learning models for molecular property prediction are increasingly used in drug discovery, but their real-world performance depends on generalization to novel chemical matter.
-2. **Problem**: Current benchmarks rely on random splits that leak information between train and test sets, systematically overestimating deployment performance.
-3. **Approach**: Here, we present a generalization evaluation framework using the Expansion Tx ADMET dataset (7,618 molecules, 10 ADME endpoints, 4 CROs + internal data) with splitting strategies that mimic real-world deployment scenarios.
+1. **Opportunity**: Machine learning models for molecular property prediction are increasingly used in drug discovery, but their real-world performance depends on generalization to novel chemical matter — a property that current benchmarks do not adequately measure.
+2. **Problem**: Standard benchmarks rely on random splits that leak structural information between train and test sets, and researchers frequently lack the industrial experience to ask the right validation questions, leading to claims that lack translational credibility.
+3. **Approach**: Here, we present a generalization evaluation framework using the Expansion Tx ADMET dataset (7,618 molecules, 10 ADME endpoints, 4 CROs + internal, from RNA-small molecule drug discovery) with splitting strategies that mimic real-world deployment and case studies that expose common failure modes.
 4. **Results**: [To be filled with key findings and numbers]
-5. **Impact**: This framework and dataset enable the community to build and evaluate molecular ML models that generalize to realistic drug discovery scenarios.
+5. **Impact**: This framework enables the community to critically assess model generalization, moving beyond aggregate metrics to understand where and why models fail.
 
 ## Introduction (4 paragraphs)
 
 ### Para 1: Field gap
-- ML-driven molecular property prediction is transforming drug discovery, but model evaluation practices have not kept pace.
+- ML-driven molecular property prediction is transforming drug discovery, but model evaluation practices have not kept pace. Claims of high performance often lack credibility because they are not validated against the distribution shifts encountered in real deployment. Lacking industrial experience and interdisciplinary expertise, researchers frequently fail to ask the right questions to validate performance for real-world applications.
 
 ### Para 2: Subfield gap
-- ADMET prediction benchmarks predominantly use random splits, which allow structurally similar molecules to appear in both train and test sets, inflating performance metrics.
+- ADMET prediction benchmarks predominantly use random splits, which allow structurally similar molecules to appear in both train and test sets, inflating performance metrics. Furthermore, the chemical coverage of current benchmarks is extremely limited. The area of dataset splitting is becoming increasingly crowded, but there remains no consensus framework that connects splitting choices to specific deployment scenarios (hit identification vs. lead optimization) or that systematically exposes the non-obvious biases in chemical datasets.
 
 ### Para 3: Paper gap
-- It remains unclear how much performance degrades under realistic deployment conditions, where test molecules differ systematically from training data in scaffold, time of synthesis, or target distribution.
+- It remains unclear how much performance degrades under realistic deployment conditions. Sheridan et al. (Merck) showed correlation between distance to training set and performance, but replicating these findings with a simple, compelling answer has proven elusive. We need a framework that goes beyond dataset splitting to probe model strengths and weaknesses through multiple complementary lenses — including activity cliffs, molecular variants, and chemical series.
 
 ### Para 4: "Here we..."
-- Here, we introduce a generalization evaluation framework built on the Expansion Tx ADMET dataset, implementing cluster-based, time-split, and target-distribution splitting strategies with diagnostic tools to quantify the gap between benchmark and deployment performance.
+- Here, we introduce a model validation framework demonstrated on the Expansion Tx ADMET dataset — a one-of-a-kind public dataset from actual drug discovery campaigns at Expansion Therapeutics. Through a collection of case studies, we show how cluster-based, time-split, and target-distribution splitting strategies, combined with performance-over-distance curves and targeted evaluations, reveal the gap between benchmark and deployment performance.
 
 ## Results
 
 ### 1. The Expansion Tx dataset provides realistic ADMET data from drug discovery
-- Dataset overview: 7,618 molecules, 10 ADME endpoints, 4 CROs + internal
-- Ordinal ordering, chemical series structure, multi-CRO provenance
+
+**Claim**: This dataset is uniquely suited for studying generalization because it comes from real drug discovery campaigns and has properties (ordinal ordering, chemical series, multi-CRO) not found in typical public benchmarks.
+
+**Content**:
+- 7,618 molecules from Expansion Therapeutics' RNA-small molecule drug discovery programs
+- 10 ADME endpoints: LogD, KSOL (kinetic solubility), HLM/RLM/MLM CLint (liver microsomal clearance), Caco-2 Papp A>B, Caco-2 Efflux, MPPB, MBPB, MGMB (protein binding)
+- Data generated by 4 CROs (Aragen, Chempartner, Pharmaron, Wuxi) + internal; vast majority from Pharmaron
+- Compounds tested across projects given importance of selectivity in RNA-targeting
+- Ordinal molecule naming (E-XXXXXXX) preserves temporal ordering — enables time-split without explicit timestamps
+- Several large chemical series (>500 compounds) — enables IID vs OOD evaluation
+- Raw dataset includes out-of-range modifiers (">", "<"); ML-ready version has in-range only
+- Characterize typical physicochemical properties — hypothesis: RNA-binding compounds differ from protein modulators (charge, aromaticity) due to RNA structure
+- Data quality: representative of real-world drug discovery, consistent original source, no obvious errors
+
+**Open questions**:
+- Can CRO annotations be obtained per compound? (important for understanding data consistency, cf. Landrum & Riniker)
+- Can repeat measurements be used to characterize aleatoric uncertainty per assay?
+- Can actual targets be shared? (selectivity context)
+- Correlation plots between assays (informative but may need to wait until after competition)
 
 ### 2. Chemical space and target distribution characterize dataset diversity
-- 1-NN distance distributions, Butina clustering
-- Endpoint distribution analysis across 10 ADME endpoints
+
+**Claim**: Prior to splitting, both the chemical space and target distribution must be characterized — not all datasets can test all hypotheses.
+
+**Content — Chemical Space**:
+- Visualize 1-NN ECFP4 Tanimoto distance distribution (dataset to itself) as a measure of chemical diversity
+- Also show all-pairwise and 5-NN distance distributions (cf. Cas's Biogen case study)
+- Butina clustering (cutoff 0.7) to identify chemical series — show cluster size distribution
+- Visualize representative molecules from the 5 largest clusters (6 random examples each)
+- If a deployment set is known (e.g., screening library), also visualize 1-NN distances from that set to the dataset to contextualize the chemical space further
+- The Biogen case study showed: dataset is diverse, with lots of datapoints having far neighbors
+
+**Content — Target Distribution**:
+- Distribution plots for each of the 10 endpoints, including total counts per endpoint (many compounds have sparse endpoint coverage)
+- The range should cover the target distribution of the deployment setting
+- Understanding which endpoints have sufficient coverage for meaningful splitting
+
+**Methodology note**: Use ECFP4 (2048-bit) + Tanimoto as the default distance metric. While no single distance captures the complete richness of molecular data, prioritize simplicity over perfection.
 
 ### 3. Splitting strategies that mimic deployment reveal performance gaps
-- Cluster-based split (EKM + k-means on ECFP6)
-- Time-split using ordinal ordering
-- Target distribution split (rolling window CV)
+
+**Claim**: Splitting strategies should be motivated by the distribution shift encountered in real-world scenarios, and must be compatible with cross-validation.
+
+**Two deployment scenarios**:
+
+#### 3a. Generalization across chemical space (Hit Identification)
+- Goal: generalize to structurally novel compounds (e.g., virtual screening)
+- **If deployment set is known**: make test set equally dissimilar to train set as the deployment set is
+- **Otherwise**: use cluster-based split
+
+**Cluster-based split** (recommended):
+- k-means clustering on ECFP4 fingerprints
+- Use Empirical Kernel Map (EKM) to make k-means compatible with ECFP4 + Tanimoto distance
+- Mini Batch K-Means for scalability
+- Each cluster (or subset of clusters) = one fold for cross-validation
+- k-means produces more equally sized clusters than hierarchical methods — needed for good train-test ratios
+- EKM + Mini Batch K-Means introduces stochasticity — slightly different clustering per replicate, useful for 5x5 CV
+
+#### 3b. Generalization across target space (Lead Optimization)
+- Goal: expand a chemical series to optimize a target property of interest
+- **Regression**: Rolling Window Cross Validation
+  - Open question: Can Rolling Window CV be made compatible with repeated cross-validation?
+- **Classification**: Create folds such that class imbalance is larger in train than in test
+  - Open question: This feels convoluted — is there a better alternative? Some sort of stratified CV with asymmetric ratios?
+
+#### 3c. Time-split using ordinal ordering
+- Exploit the ordinal molecule naming (E-XXXXXXX) as a proxy for temporal ordering
+- Split earlier molecules as train, later as test — mimics real-world scenario where models are trained on historical data and deployed on new compounds
+- Unique to this dataset — public datasets rarely have temporal information
 
 ### 4. Split quality diagnostics validate splitting approaches
-- Train/test distribution overlap metrics
-- Scaffold diversity comparisons
+
+**Claim**: Sanity checks are essential to detect split artifacts that can invalidate conclusions.
+
+**Required checks**:
+1. **Split size**: No excessively large or small test sets — verify expected train-test ratio across all folds
+2. **Target distribution**: Ensure expected class imbalance / value range in each fold; no fold should have a drastically different target distribution
+3. **Test-to-train distance distribution**: Visualize for each fold; should be similar to the deployment set distance distribution (if known) or the screening library distance distribution
+4. **Train-test overlap**: Check for structural overlap (e.g., identical scaffolds, near-duplicates)
+
+**Optional**:
+- UMAP embedding visualization of train/test per fold
 
 ### 5. Performance degrades with distance from training data
-- Performance-over-distance curves
-- Quantifying the random-split optimism gap
+
+**Claim**: Aggregate performance metrics hide systematic degradation at the frontier of the training distribution. A performance-over-distance curve reveals where models actually fail.
+
+**Motivation**: Sheridan et al. (Merck) showed correlation between distance to train set and performance. If we could characterize generalization with such a curve, we could estimate performance for any specific deployment set and compare models meaningfully. If we just look at average performance and care about a virtual screening application, we overestimate performance on the deployment set.
+
+**Sampling the curve** (recommended protocol from guidelines):
+1. **Split**: Use chosen cross-validation split
+2. **Distance**: For each test datapoint, compute distance to nearest training neighbor (ECFP4 + Tanimoto)
+3. **Bins**: Combine all distances across splits, define bins using sliding window:
+   - min = Q1 - 1.5*IQR, max = Q3 + 1.5*IQR (filter major outliers)
+   - binwidth = (max - min) / 5
+   - stepsize = binwidth / 20
+   - bin_i = (min + stepsize * i, min + stepsize * i + binwidth)
+4. **Per-split curve**: Compute performance metric in each bin per split. Skip bins with < 25 samples
+5. **Visualize**: Combine per-split curves into single figure with confidence intervals
+
+**Two curves recommended**:
+1. Performance over ECFP4 Tanimoto distance (chemical space)
+2. Performance over target space distance
+
+**Distance metric note**: With the right choice, performance decreases with distance. For protein-ligand binding, the field has agreed on specific metrics (cf. Runs 'N Poses benchmark). For small molecules, no single universal metric exists — the right notion is endpoint-specific. Default: 2048-bit ECFP4 + Tanimoto.
 
 ### 6. Case studies illustrate generalization failure modes
-- IID vs OOD evaluation on chemical series
-- Scaffold vs random split comparison
-- Split variance study
-- Activity cliff evaluation
-- Molecular variant consistency
+
+**Claim**: Beyond splitting, targeted case studies expose specific failure modes that aggregate metrics miss. These provide a framework for critically thinking about model strengths and weaknesses.
+
+#### 6a. IID vs OOD on chemical series (the "hero" example)
+- Take two large clusters (chemical series) from the dataset
+- Split the largest cluster using time-split: training set + validation set (IID)
+- Use the smaller cluster as OOD test set
+- Train default random forest on ECFP fingerprints
+- Compare squared error intra-series (IID) vs inter-series (OOD)
+- **Expected result**: Performance in a different series is much worse
+- **Why it matters**: Uses two things normally unavailable in public datasets — time split and chemical series
+- This is a trivial example but an exciting one — motivates the full framework
+
+#### 6b. Scaffold vs random split comparison
+- Ref: Greg Landrum's blog — without careful considerations, a scaffold split is similar to a random split
+- Show that naive scaffold splitting fails to create meaningful distribution shift
+- Compare with cluster-based split to demonstrate when scaffold splits are and aren't useful
+- Quantify the similarity between scaffold and random split performance
+
+#### 6c. Split variance study
+- Ref: Pat's blog — show the variance in performance when evaluating on different splits
+- Multiple random seeds / different fold assignments
+- Demonstrate that single-split evaluation can be misleading
+- Motivate the need for cross-validation with confidence intervals
+
+#### 6d. Activity cliff evaluation
+- Ref: MoleculeACE
+- Identify activity cliffs in the dataset (pairs of structurally similar molecules with large differences in activity)
+- Set aside activity cliffs and evaluate model performance specifically on these pairs
+- Models that interpolate smoothly will fail on cliffs — a critical failure mode for lead optimization
+
+#### 6e. Molecular variant consistency
+- Ref: Srijit's LinkedIn post
+- Set aside groups of related molecules: stereoisomers, tautomers, resonance (Kekule) structures, different protonation states, different decorations of a shared scaffold
+- Check for variance in model predictions across these groups
+- Consistent models should predict similar values for structurally minor variants
+- Exposes whether models learn chemistry or memorize fingerprint artifacts
 
 ## Discussion
 
 ### Summary
-- Restate: random splits overestimate performance; framework quantifies the gap
+- Random splits systematically overestimate performance; our case studies quantify the gap and reveal specific failure modes
+- The framework connects evaluation choices to deployment scenarios (hit identification vs. lead optimization)
+- The Expansion Tx dataset uniquely enables these analyses due to its real-world provenance
 
 ### Limitations
-- Single therapeutic area (RNA-small molecule)
-- Dataset size relative to large-scale benchmarks
-- Endpoint selection and CRO coverage
+- Single therapeutic area (RNA-small molecule) — compounds may have different properties from protein modulators; generalizability of findings to other target classes is unknown
+- Dataset size (7,618) is modest relative to large-scale benchmarks — some analyses may be power-limited
+- Endpoint sparsity — not all molecules have all 10 endpoints measured
+- Distance metric choice (ECFP4 + Tanimoto) is pragmatic but endpoint-specific metrics could perform better
+- Data curation assumed — we provide high-level criteria but detailed curation guidance is out of scope (planned for future work)
+- CRO consistency not fully characterized (pending annotation availability)
 
 ### Community Opportunities
-- Framework extensibility to other datasets
-- Standardized splitting for ADMET benchmarks
+- Framework is extensible to any ADMET dataset — code and methodology will be open-sourced
+- Standardized evaluation protocol for ADMET benchmarks
+- The OpenADMET competition sets the stage — community excitement around the dataset
+- Call for more real-world data release: "The more real-world data we collectively put out there, the faster we make drug discovery simpler" (Jon Ainsley, Expansion Tx)
 
 ## Methods
 
-- Dataset curation and preprocessing
-- Fingerprint computation (ECFP6)
-- Splitting algorithms (cluster, time, target distribution)
-- Evaluation metrics
-- Statistical analysis
+### Dataset
+- Source: Expansion Therapeutics, via OpenADMET
+- 7,618 molecules, 10 ADME endpoints
+- Raw vs ML-ready versions (out-of-range modifier handling)
+- Train/test split from competition (5,326 / 2,282)
+
+### Fingerprints and Distance
+- ECFP4, 2048-bit, Tanimoto similarity/distance
+- Justification: prioritize simplicity over perfection; no single metric captures full molecular richness
+
+### Clustering
+- Butina clustering (cutoff 0.7) for chemical series identification
+- k-means with Empirical Kernel Map for splitting (compatible with Tanimoto distance)
+- Mini Batch K-Means for scalability and stochasticity
+
+### Splitting Algorithms
+- Cluster-based: EKM + k-means, each cluster = fold
+- Time-split: ordinal molecule naming as temporal proxy
+- Target distribution: Rolling Window CV for regression
+
+### Evaluation Metrics
+- Per-endpoint regression metrics (RMSE, R², MAE)
+- Performance-over-distance curves with sliding window bins
+- Cross-validation with confidence intervals (5x5 CV where applicable)
+
+### Models
+- Default scikit-learn models (e.g., Random Forest, MLP) on ECFP fingerprints
+- Focus is on evaluation framework, not model architecture
 
 ## Figures
 
-| Figure | Title | Source |
-|--------|-------|--------|
-| Fig 1 | Dataset overview and chemical space | Notebooks 1.01, 2.01 |
-| Fig 2 | Splitting strategy comparison | Notebooks 2.03-2.05 |
-| Fig 3 | Performance-over-distance curves | Notebook 2.07 |
-| Fig 4 | Case studies (IID vs OOD, scaffolds) | Notebooks 2.08, 2.11 |
-| Fig S1 | Split quality diagnostics | Notebook 2.06 |
-| Fig S2 | Split variance analysis | Notebook 2.12 |
+| Figure | Title | Source | Content |
+|--------|-------|--------|---------|
+| Fig 1 | Dataset overview | NB 1.01 | Endpoint distributions, counts per endpoint, dataset provenance |
+| Fig 2 | Chemical space characterization | NB 2.01 | 1-NN distance distribution, all-pairwise distances, Butina cluster sizes, representative molecules from top clusters |
+| Fig 3 | Target distribution analysis | NB 2.02 | Per-endpoint distributions, coverage heatmap |
+| Fig 4 | Splitting strategy comparison | NB 2.03-2.05 | Side-by-side: cluster vs time vs target-distribution splits |
+| Fig 5 | Split quality diagnostics | NB 2.06 | Split sizes, target distributions per fold, test-to-train distance distributions, optional UMAP |
+| Fig 6 | Performance-over-distance curves | NB 2.07 | Curves with confidence intervals for multiple endpoints; highlight overestimation from average metrics |
+| Fig 7 | IID vs OOD on chemical series | NB 2.08 | The "hero" example: intra-series vs inter-series performance with time-split |
+| Fig S1 | Scaffold vs random split | NB 2.11 | Demonstrating naive scaffold split ≈ random split |
+| Fig S2 | Split variance analysis | NB 2.12 | Performance distribution across multiple splits |
+| Fig S3 | Activity cliff evaluation | NB 2.10 | Model performance on activity cliff pairs |
+| Fig S4 | Molecular variant consistency | NB 2.13 | Prediction variance across stereoisomers, tautomers, etc. |
+
+## Key References
+
+- Sheridan et al. (Merck) — performance over distance correlation
+- MoleculeACE — activity cliff evaluation
+- Greg Landrum's blog — scaffold split ≈ random split
+- Pat's blog — split variance
+- MOOD, SPECTRA — performance over distance curves
+- Runs 'N Poses — distance metrics for protein-ligand binding
+- Landrum & Riniker — aggregating data from multiple sources
+- Polaris Method Comparison preprint — prior work on guidelines

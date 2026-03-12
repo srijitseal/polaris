@@ -12,6 +12,9 @@ You must never coauthor commits with Claude.
 # Install dependencies using pixi
 pixi install
 
+# Download dataset from HuggingFace
+bash scripts/download_data.sh
+
 # Run Python
 pixi run python
 ```
@@ -56,17 +59,24 @@ This is a generalization evaluation framework for molecular ML, analyzing how mo
 
 4. **Configuration** (`configs/`): Model and experiment configuration files
 
-### Dataset Context
+### Dataset
 
-- **Expansion Tx ADMET dataset**: 7,618 molecules, 10 ADME endpoints
-- 4 CROs + internal data — multi-CRO provenance enables cross-lab evaluation
-- Ordinal ordering enables time-split experiments
-- Large chemical series enable IID vs OOD evaluation
-- RNA-small molecule drug discovery context
+Source: [openadmet/openadmet-expansionrx-challenge-data](https://huggingface.co/datasets/openadmet/openadmet-expansionrx-challenge-data) (HuggingFace)
 
-### Data Storage
+**Files** (in `data/raw/`):
+- `expansion_data_raw.csv` (7,618 molecules) — full dataset with out-of-range modifiers (e.g., ">", "<")
+- `expansion_data_train.csv` (5,326 molecules) — ML-ready train split (in-range only)
+- `expansion_data_test.csv` (2,282 molecules) — ML-ready test split (in-range only)
 
-Data is stored on GitHub (no S3/AWS). Use `data/` directories directly.
+**Columns**: `Molecule Name`, `SMILES`, plus 10 ADME endpoints:
+- `LogD`, `KSOL` (kinetic solubility, uM)
+- `HLM CLint`, `RLM CLint`, `MLM CLint` (liver microsomal clearance, mL/min/kg) — RLM only in raw
+- `Caco-2 Permeability Papp A>B` (10^-6 cm/s), `Caco-2 Permeability Efflux`
+- `MPPB`, `MBPB`, `MGMB` (protein binding, % unbound)
+
+**Key features**: Ordinal molecule naming (enables time-split), chemical series structure (enables IID vs OOD), multi-CRO provenance, RNA-small molecule drug discovery context.
+
+Download: `bash scripts/download_data.sh` — data is gitignored.
 
 ## Git Commands
 
