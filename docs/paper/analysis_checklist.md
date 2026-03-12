@@ -6,14 +6,14 @@ Status tracking for all planned analyses. This is the source of truth for analys
 
 | Status | Notebook | Description |
 |--------|----------|-------------|
-| TODO | `0.01-seal-dataset-exploration.py` | Initial Expansion Tx dataset exploration: load raw + ML-ready CSVs, count molecules/endpoints, check missingness, endpoint coverage per molecule, CRO distribution (if annotated), physicochemical property characterization (RNA-binding vs protein modulator hypothesis) |
-| TODO | `0.02-seal-ecfp-distance-exploration.py` | ECFP fingerprint and distance exploration: compute 2048-bit ECFP4 fingerprints, all-pairwise Tanimoto distances, 1-NN and 5-NN distance distributions, compare to Cas's Biogen HLM case study |
+| DONE | `0.01-seal-dataset-exploration.py` | Initial Expansion Tx dataset exploration: load raw + ML-ready CSVs, count molecules/endpoints, check missingness, endpoint coverage per molecule, CRO distribution (if annotated), physicochemical property characterization (RNA-binding vs protein modulator hypothesis) |
+| DONE | `0.02-seal-ecfp-distance-exploration.py` | ECFP fingerprint and distance exploration: compute 2048-bit ECFP4 fingerprints, all-pairwise Tanimoto distances, 1-NN and 5-NN distance distributions, compare to Cas's Biogen HLM case study |
 
 ## Phase 1: Data Loading
 
 | Status | Notebook | Description |
 |--------|----------|-------------|
-| TODO | `1.01-seal-dataset-loader.py` | Dataset loading pipeline: load raw and ML-ready CSVs, validate molecule counts (7,618 raw / 5,326 train / 2,282 test), parse SMILES, handle out-of-range modifiers in raw data, CRO annotation (if available), ordinal ordering validation from molecule names (E-XXXXXXX), save to interim/ |
+| DONE | `1.01-seal-dataset-loader.py` | Dataset loading pipeline: load raw and ML-ready CSVs, validate molecule counts (7,618 raw / 5,326 train / 2,282 test), parse SMILES, handle out-of-range modifiers in raw data, CRO annotation (if available), ordinal ordering validation from molecule names (E-XXXXXXX), save to interim/ |
 
 ## Phase 2: Analysis
 
