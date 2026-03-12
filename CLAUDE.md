@@ -12,8 +12,8 @@ You must never coauthor commits with Claude.
 # Install dependencies using pixi
 pixi install
 
-# Download dataset from HuggingFace
-bash scripts/download_data.sh
+# Download dataset from HuggingFace (also runs automatically on cheminformatics env activation)
+pixi run download
 
 # Run Python
 pixi run python
@@ -76,7 +76,7 @@ Source: [openadmet/openadmet-expansionrx-challenge-data](https://huggingface.co/
 
 **Key features**: Ordinal molecule naming (enables time-split), chemical series structure (enables IID vs OOD), multi-CRO provenance, RNA-small molecule drug discovery context.
 
-Download: `bash scripts/download_data.sh` — data is gitignored.
+Download: `pixi run download` (also auto-runs on cheminformatics env activation) — data is gitignored.
 
 ## Git Commands
 

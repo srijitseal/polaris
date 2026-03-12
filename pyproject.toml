@@ -1,22 +1,26 @@
 [project]
-authors = [{ name = "Srijit Seal" }]
-dependencies = [
-    "pandas>=2.2,<3",
-    "numpy>=1.26,<3",
-    "scikit-learn>=1.5,<2",
-    "matplotlib>=3.9,<4",
-    "seaborn>=0.13,<0.14",
-    "loguru>=0.7,<0.8",
-    "typer>=0.12,<1",
-    "ipykernel>=6.29,<8",
-]
 name = "polaris_generalization"
-requires-python = ">= 3.11"
 version = "0.1.0"
+description = "Generalization evaluation framework for molecular ML"
+authors = [{ name = "Srijit Seal" }]
+license = { text = "MIT" }
+requires-python = ">= 3.11"
+dependencies = [
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "scikit-learn>=1.5",
+    "matplotlib>=3.9",
+    "seaborn>=0.13",
+    "loguru>=0.7",
+    "typer>=0.12",
+]
 
 [build-system]
 build-backend = "hatchling.build"
 requires = ["hatchling"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/polaris_generalization"]
 
 [tool.pixi.workspace]
 channels = ["conda-forge"]
@@ -25,35 +29,21 @@ platforms = ["osx-arm64", "linux-64"]
 [tool.pixi.pypi-dependencies]
 polaris_generalization = { path = ".", editable = true }
 
-[tool.pixi.tasks]
-
 [tool.pixi.dependencies]
 python = "3.12.*"
 
-# Feature: Cheminformatics (rdkit via conda)
-[tool.pixi.feature.cheminformatics]
-platforms = ["osx-arm64", "linux-64"]
+[tool.pixi.tasks]
+download = "bash scripts/download_data.sh"
 
+# Feature: Cheminformatics (rdkit + pyarrow via conda, everything else from pypi)
 [tool.pixi.feature.cheminformatics.dependencies]
-python = "3.12.*"
-rdkit = "*"
-numpy = "*"
-pandas = "*"
-matplotlib = "*"
-seaborn = "*"
-scikit-learn = "*"
-pyarrow = "*"
-typer = "*"
-loguru = "*"
-
-[tool.pixi.feature.cheminformatics.activation]
-env = { PYTHONPATH = "src" }
+rdkit = ">=2024.03"
+pyarrow = ">=14"
 
 [tool.pixi.environments]
-default = { solve-group = "default" }
-lint = { features = ["lint"], solve-group = "default" }
-test = { features = ["test"], solve-group = "default" }
-cheminformatics = { features = ["cheminformatics"], no-default-feature = true }
+lint = { features = ["lint"] }
+test = { features = ["test"] }
+cheminformatics = { features = ["cheminformatics"] }
 
 [dependency-groups]
 lint = ["ruff>=0.8.0"]
