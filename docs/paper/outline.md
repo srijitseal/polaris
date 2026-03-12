@@ -102,14 +102,18 @@ This paper sits between a review and an opinion paper. Instead of prescriptive "
 
 #### 3b. Generalization across target space (Lead Optimization)
 - Goal: expand a chemical series to optimize a target property of interest
-- **Regression**: Rolling Window Cross Validation
-  - Open question: Can Rolling Window CV be made compatible with repeated cross-validation?
-- **Classification**: Create folds such that class imbalance is larger in train than in test
-  - Open question: This feels convoluted — is there a better alternative? Some sort of stratified CV with asymmetric ratios?
+- **Regression**: Expanding window CV sorted by endpoint value (4 folds)
+  - Train on lower values, test on progressively higher values — tests extrapolation
+  - Target-split produces low structural distances (LogD median 1-NN: 0.245–0.286) — molecules with similar target values are often structurally similar
+  - CLint endpoints show extreme value ranges in later folds (e.g., HLM CLint fold 3: 58.5–2589.9)
+  - Deterministic, single repeat (no stochasticity in value-based sorting)
 
 #### 3c. Time-split using ordinal ordering
 - Exploit the ordinal molecule naming (E-XXXXXXX) as a proxy for temporal ordering
 - Split earlier molecules as train, later as test — mimics real-world scenario where models are trained on historical data and deployed on new compounds
+- Expanding window CV: 4 folds, each trains on all earlier data, tests on next temporal chunk
+- Time-split pooled median 1-NN distance (0.350) is lower than cluster-split (0.410) — temporal neighbors are often structurally similar (same chemical series explored over time)
+- Per-fold medians (0.386, 0.351, 0.302, 0.364) do not monotonically increase — chemical series exploration is non-linear in time
 - Unique to this dataset — public datasets rarely have temporal information
 
 ### 4. Split quality diagnostics validate splitting approaches
