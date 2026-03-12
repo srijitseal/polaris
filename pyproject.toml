@@ -3,7 +3,7 @@ name = "polaris_generalization"
 version = "0.1.0"
 description = "Generalization evaluation framework for molecular ML"
 authors = [{ name = "Srijit Seal" }]
-license = { text = "MIT" }
+license = { file = "LICENSE" }
 requires-python = ">= 3.11"
 dependencies = [
     "pandas>=2.2",
