@@ -42,6 +42,7 @@ pandas = "*"
 matplotlib = "*"
 seaborn = "*"
 scikit-learn = "*"
+pyarrow = "*"
 typer = "*"
 loguru = "*"
 

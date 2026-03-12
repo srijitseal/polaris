@@ -61,12 +61,18 @@ This paper sits between a review and an opinion paper. Instead of prescriptive "
 - Visualize 1-NN ECFP4 Tanimoto distance distribution (dataset to itself) as a measure of chemical diversity
 - Also show all-pairwise and 5-NN distance distributions (cf. Cas's Biogen case study)
 - Butina clustering (cutoff 0.7) to identify chemical series — show cluster size distribution
+  - 135 clusters total; top 5 sizes: 2578, 885, 1306, 258, 70; 33 singletons (24.4%); median size 4
+  - Three dominant clusters contain ~63% of molecules — dataset has concentrated chemical series
 - Visualize representative molecules from the 5 largest clusters (6 random examples each)
 - If a deployment set is known (e.g., screening library), also visualize 1-NN distances from that set to the dataset to contextualize the chemical space further
 - The Biogen case study showed: dataset is diverse, with lots of datapoints having far neighbors
 
 **Content — Target Distribution**:
-- Distribution plots for each of the 10 endpoints, including total counts per endpoint (many compounds have sparse endpoint coverage)
+- Distribution plots for each of the 9 endpoints, including total counts per endpoint (many compounds have sparse endpoint coverage)
+  - Well-covered: LogD (7,309, 96%), KSOL (7,298, 96%), MLM CLint (5,692, 75%)
+  - Moderate: HLM CLint (4,541, 60%), Caco-2 Papp/Efflux (~3,775, 50%)
+  - Sparse: MPPB (1,756, 23%), MBPB (1,426, 19%), MGMB (431, 6%)
+  - All endpoints show significant train/test distribution shift (KS test p < 0.01), especially Caco-2 Efflux (KS=0.37) and Caco-2 Papp (KS=0.28)
 - The range should cover the target distribution of the deployment setting
 - Understanding which endpoints have sufficient coverage for meaningful splitting
 
