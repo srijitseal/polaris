@@ -96,6 +96,9 @@ This paper sits between a review and an opinion paper. Instead of prescriptive "
 - Each cluster (or subset of clusters) = one fold for cross-validation
 - k-means produces more equally sized clusters than hierarchical methods — needed for good train-test ratios
 - EKM + Mini Batch K-Means introduces stochasticity — slightly different clustering per replicate, useful for 5x5 CV
+- Per-endpoint fold assignments: each endpoint gets its own folds using only molecules with non-null values
+- Over-cluster (k=20) then greedily assign clusters to folds for balance — all endpoints achieve max/min fold size ratio < 1.12
+- 5x5 CV: 5 repeats × 5 folds = 25 train/test splits per endpoint
 
 #### 3b. Generalization across target space (Lead Optimization)
 - Goal: expand a chemical series to optimize a target property of interest

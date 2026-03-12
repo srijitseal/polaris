@@ -15,3 +15,4 @@ Each decision is documented in a separate markdown file with:
 
 | ID | Title | Status |
 |----|-------|--------|
+| [001](001-overclustering-for-balanced-folds.md) | Over-cluster then greedily assign to folds for balanced CV splits | Accepted |
