@@ -136,21 +136,44 @@ This paper sits between a review and an opinion paper. Instead of prescriptive "
 **Motivation**: Sheridan et al. (Merck) showed correlation between distance to train set and performance. If we could characterize generalization with such a curve, we could estimate performance for any specific deployment set and compare models meaningfully. If we just look at average performance and care about a virtual screening application, we overestimate performance on the deployment set.
 
 **Sampling the curve** (recommended protocol from guidelines):
-1. **Split**: Use chosen cross-validation split
+1. **Split**: Use all three pre-saved CV splits (cluster repeat 0: 5 folds; time repeat 0: 4 folds; target repeat 0: 4 folds)
 2. **Distance**: For each test datapoint, compute distance to nearest training neighbor (ECFP4 + Tanimoto)
 3. **Bins**: Combine all distances across splits, define bins using sliding window:
    - min = Q1 - 1.5*IQR, max = Q3 + 1.5*IQR (filter major outliers)
    - binwidth = (max - min) / 5
    - stepsize = binwidth / 20
    - bin_i = (min + stepsize * i, min + stepsize * i + binwidth)
-4. **Per-split curve**: Compute performance metric in each bin per split. Skip bins with < 25 samples
-5. **Visualize**: Combine per-split curves into single figure with confidence intervals
+4. **Per-split curve**: Compute performance metric (RMSE) in each bin per fold. Skip bins with < 25 samples
+5. **Visualize**: Combine per-fold curves into single figure with median + 10th–90th percentile bands
 
-**Two curves recommended**:
-1. Performance over ECFP4 Tanimoto distance (chemical space)
-2. Performance over target space distance
+**Two distance metrics**:
+1. Performance over ECFP4 Tanimoto distance (structural space)
+2. Performance over target-space distance (|y_test - nearest y_train|)
+
+**Model**: XGBoost (fixed architecture: n_estimators=1000, max_depth=6, lr=0.1, subsample=0.8, colsample_bytree=0.4) on ECFP4 + full RDKit 2D descriptors (~200), with dimorphite_dl protonation at assay pH (7.4 for most, 6.5 for Caco-2). Targets log-transformed via `log10(clip(x, 1e-10) + 1)` for all endpoints except LogD, matching competition evaluation protocol. Fixed architecture (no per-endpoint tuning) avoids data leakage across CV folds.
+
+**Key findings** (all 9 endpoints, competition metrics):
+- **Cluster-split** (MA-RAE 0.726) gives the best overall performance — each fold sees structurally diverse training data. R² ranges from 0.27 (HLM CLint) to 0.66 (LogD)
+- **Time-split** (MA-RAE 0.837) is worse because early folds have small training sets (expanding window starts at 50:50). R² drops below 0 for MGMB where training data is smallest (86 molecules at fold 0)
+- **Target-split** (MA-RAE 6.927) produces catastrophically negative R² across all endpoints — by design, folds are ordered by target value, so test molecules systematically fall outside the training distribution. Spearman ρ collapses to near-zero (~0.01–0.07)
+- **Structural degradation on log-scale**: cluster-split shows 2–3x RMSE degradation for most endpoints (LogD 2.9x, MGMB 2.9x, HLM CLint 2.8x, MPPB 2.3x), while Caco-2 endpoints show minimal degradation (~1x)
+- **Comparison to competition baseline**: cluster-split CV (MA-RAE 0.726) is more optimistic than the held-out test set (MA-RAE 0.820), as expected — the competition split likely contains more structurally novel molecules
+- **Target-space distance curves** confirm complementary view: target-split shows increasing RMSE with target distance (by design), while cluster-split shows flatter target-space curves
 
 **Distance metric note**: With the right choice, performance decreases with distance. For protein-ligand binding, the field has agreed on specific metrics (cf. Runs 'N Poses benchmark). For small molecules, no single universal metric exists — the right notion is endpoint-specific. Default: 2048-bit ECFP4 + Tanimoto.
+
+### 5b. Baseline performance on the original competition split
+
+**Claim**: Even simple baselines on the original train/test split reveal which endpoints are predictable and which are not — providing context for interpreting competition leaderboard scores and CV-based analyses.
+
+**Setup**: XGBoost with per-endpoint hyperparameter tuning (HalvingRandomSearchCV, 50 candidates, factor=3, 3-fold CV) on ECFP4 + full RDKit 2D descriptors (~200), with dimorphite_dl protonation at assay pH. Trained on 5,326 train molecules, evaluated on 2,282 test molecules. Targets log-transformed for all endpoints except LogD. Metrics: MAE, R², Spearman ρ, Kendall's τ, RAE, MA-RAE (matching competition evaluation protocol).
+
+**Key findings** (MA-RAE 0.820):
+- LogD is most predictable (R² 0.53, RAE 0.66) — log-scale values and high data coverage (5,039 train)
+- Protein binding endpoints (MBPB R² 0.40, MGMB R² 0.35) perform surprisingly well despite small training sets (975, 222)
+- CLint endpoints are hardest (HLM R² 0.17, MLM R² 0.21) — heavy-tailed distributions even after log-transform
+- Log-transform is essential: training on raw-scale targets and only log-transforming at evaluation produces poor R² because the model optimizes for raw-scale MSE dominated by high-value outliers
+- Full RDKit 2D descriptors + dimorphite_dl protonation gave mixed per-endpoint effects but improved overall MA-RAE (0.826 → 0.820)
 
 ### 6. Case studies illustrate generalization failure modes
 
@@ -235,13 +258,20 @@ This paper sits between a review and an opinion paper. Instead of prescriptive "
 - Time-split: ordinal molecule naming as temporal proxy
 - Target distribution: Rolling Window CV for regression
 
+### Features
+- 2048-bit ECFP4 fingerprints + full RDKit 2D descriptor suite (~200 descriptors, zero-variance removed, StandardScaler-normalized)
+- Molecules protonated at assay-relevant pH using dimorphite_dl (pH 7.4 for most endpoints, pH 6.5 for Caco-2) before feature computation
+- Features computed per unique pH, then selected per endpoint
+
 ### Evaluation Metrics
-- Per-endpoint regression metrics (RMSE, R², MAE)
-- Performance-over-distance curves with sliding window bins
+- Competition metrics: MAE, R², Spearman ρ, Kendall's τ, RAE, MA-RAE (macro-averaged RAE across 9 endpoints)
+- Targets log-transformed via `log10(clip(x, 1e-10) + 1)` for all endpoints except LogD, matching competition protocol
+- Performance-over-distance curves with sliding window bins (RMSE per bin)
 - Cross-validation with confidence intervals (5x5 CV where applicable)
 
 ### Models
-- Default scikit-learn models (e.g., Random Forest, MLP) on ECFP fingerprints
+- **CV analyses (2.07)**: XGBoost with fixed architecture (n_estimators=1000, max_depth=6, lr=0.1, subsample=0.8, colsample_bytree=0.4, min_child_weight=5, gamma=1.0, reg_alpha=0.1, reg_lambda=1.5) — same config across all 9 endpoints and 3 split strategies to avoid data leakage
+- **Baseline (2.08)**: XGBoost with per-endpoint hyperparameter tuning via HalvingRandomSearchCV (50 candidates, factor=3, 3-fold CV, scoring=neg_MAE) on the competition train/test split
 - Focus is on evaluation framework, not model architecture
 
 ## Figures
@@ -253,8 +283,9 @@ This paper sits between a review and an opinion paper. Instead of prescriptive "
 | Fig 3 | Target distribution analysis | NB 2.02 | Per-endpoint distributions, coverage heatmap |
 | Fig 4 | Splitting strategy comparison | NB 2.03-2.05 | Side-by-side: cluster vs time vs target-distribution splits |
 | Fig 5 | Split quality diagnostics | NB 2.06 | Split sizes, target distributions per fold, test-to-train distance distributions, optional UMAP |
-| Fig 6 | Performance-over-distance curves | NB 2.07 | Curves with confidence intervals for multiple endpoints; highlight overestimation from average metrics |
-| Fig 7 | IID vs OOD on chemical series | NB 2.08 | The "hero" example: intra-series vs inter-series performance with time-split |
+| Fig 6 | Performance-over-distance curves | NB 2.07 | RMSE vs structural distance and target-space distance for all 9 endpoints; XGBoost (fixed arch) across cluster/time/target splits; sliding-window bins with fold-level CI bands; overall R²/MAE/Spearman/RAE bar charts |
+| Fig 6b | Baseline performance on original split | NB 2.08 | R², MAE, Spearman ρ per endpoint; y_true vs y_pred scatter; XGBoost (tuned) on competition train/test |
+| Fig 7 | IID vs OOD on chemical series | NB 2.09 | The "hero" example: intra-series vs inter-series performance with time-split |
 | Fig S1 | Scaffold vs random split | NB 2.11 | Demonstrating naive scaffold split ≈ random split |
 | Fig S2 | Split variance analysis | NB 2.12 | Performance distribution across multiple splits |
 | Fig S3 | Activity cliff evaluation | NB 2.10 | Model performance on activity cliff pairs |
