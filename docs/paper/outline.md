@@ -197,9 +197,11 @@ This paper sits between a review and an opinion paper. Instead of prescriptive "
 
 #### 6c. Split variance study
 - Ref: Pat's blog — show the variance in performance when evaluating on different splits
-- Multiple random seeds / different fold assignments
-- Demonstrate that single-split evaluation can be misleading
-- Motivate the need for cross-validation with confidence intervals
+- 20 random-split repeats + 5 cluster-split repeats across all 9 endpoints (~1,125 models)
+- **Key finding**: Random splits give false confidence — tight variance (RAE std 0.002–0.012) but at an optimistic level (mean RAE ~0.48). Cluster splits reveal the true uncertainty (RAE std 0.020–0.060, range up to 0.185) at a harder level (mean RAE ~0.71)
+- The splitting strategy matters more than the number of repeats: random CV produces precise-but-biased estimates, while cluster CV reveals deployment-relevant uncertainty
+- Worst case: MLM CLint cluster R² spans 0.109–0.454 across 5 repeats — a single split could report "poor" or "moderate" depending on the seed
+- Motivate the need for distance-aware splitting with repeated CV and confidence intervals
 
 #### 6d. Activity cliff evaluation
 - Ref: MoleculeACE
@@ -287,7 +289,7 @@ This paper sits between a review and an opinion paper. Instead of prescriptive "
 | Fig 6b | Baseline performance on original split | NB 2.08 | R², MAE, Spearman ρ per endpoint; y_true vs y_pred scatter; XGBoost (tuned) on competition train/test |
 | Fig 7 | IID vs OOD on chemical series | NB 2.09 | The "hero" example: intra-series vs inter-series performance with time-split |
 | Fig S1 | Scaffold vs random split | NB 2.11 | Demonstrating naive scaffold split ≈ random split |
-| Fig S2 | Split variance analysis | NB 2.12 | Performance distribution across multiple splits |
+| Fig S2 | Split variance analysis | NB 2.12 | Random splits give false confidence (tight CI, optimistic); cluster splits reveal true uncertainty (wide CI, honest). 20 random + 5 cluster repeats |
 | Fig S3 | Activity cliff evaluation | NB 2.10 | Model performance on activity cliff pairs |
 | Fig S4 | Molecular variant consistency | NB 2.13 | Prediction variance across stereoisomers, tautomers, etc. |
 
