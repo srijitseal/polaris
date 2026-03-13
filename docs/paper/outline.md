@@ -13,7 +13,7 @@ This paper sits between a review and an opinion paper. Instead of prescriptive "
 1. **Opportunity**: Machine learning models for molecular property prediction are increasingly used in drug discovery, but their real-world performance depends on generalization to novel chemical matter — a property that current benchmarks do not adequately measure.
 2. **Problem**: Standard benchmarks rely on random splits that leak structural information between train and test sets, and researchers frequently lack the industrial experience to ask the right validation questions, leading to claims that lack translational credibility.
 3. **Approach**: Here, we present a generalization evaluation framework using the Expansion Tx ADMET dataset (7,618 molecules, 10 ADME endpoints, 4 CROs + internal, from RNA-small molecule drug discovery) with splitting strategies that mimic real-world deployment and case studies that expose common failure modes.
-4. **Results**: [To be filled with key findings and numbers]
+4. **Results**: We show that random splits overestimate performance by 51% (MA-RAE 0.479 vs 0.726 with cluster-based splitting), that naive scaffold splits offer no improvement over random (MA-RAE 0.536), and that models trained on one chemical series degrade 1.2–12.9× when applied to a different series. We further demonstrate that ECFP4 fingerprints are completely blind to stereochemistry (15% of the dataset), that activity cliffs cause systematic prediction failures for 7 of 9 endpoints, and that random CV gives precise estimates of the wrong thing (tight variance at an optimistic level).
 5. **Impact**: This framework enables the community to critically assess model generalization, moving beyond aggregate metrics to understand where and why models fail.
 
 ## Introduction (4 paragraphs)
@@ -180,20 +180,25 @@ This paper sits between a review and an opinion paper. Instead of prescriptive "
 **Claim**: Beyond splitting, targeted case studies expose specific failure modes that aggregate metrics miss. These provide a framework for critically thinking about model strengths and weaknesses.
 
 #### 6a. IID vs OOD on chemical series (the "hero" example)
-- Take two large clusters (chemical series) from the dataset
-- Split the largest cluster using time-split: training set + validation set (IID)
-- Use the smaller cluster as OOD test set
-- Train default random forest on ECFP fingerprints
-- Compare squared error intra-series (IID) vs inter-series (OOD)
-- **Expected result**: Performance in a different series is much worse
-- **Why it matters**: Uses two things normally unavailable in public datasets — time split and chemical series
-- This is a trivial example but an exciting one — motivates the full framework
+- Train default XGBoost on the largest Butina cluster (n=2,578), time-split into train + IID validation
+- OOD test: second-largest cluster (n=1,306) — a structurally distinct chemical series
+- IID 1-NN median distance: 0.282; OOD 1-NN median: 0.761 — nearly 3× further
+- **Key finding**: Dramatic OOD degradation across all endpoints:
+  - R² goes negative OOD for 7 of 8 endpoints (model worse than predicting the mean)
+  - Median squared error increases 1.2–12.9× (MLM CLint 12.9×, KSOL 10.0×, MPPB 7.1×)
+  - RAE exceeds 1.0 (worse than mean) on OOD for 6 of 8 endpoints
+  - Spearman ρ collapses from 0.50–0.75 (IID) to near-zero (OOD)
+  - LogD most robust (4.3× degradation, retains R²=0.09 OOD)
+- **Why it matters**: Uses two things normally unavailable in public datasets — time split and chemical series. A trivial experiment with a devastating result — motivates the full framework
 
 #### 6b. Scaffold vs random split comparison
 - Ref: Greg Landrum's blog — without careful considerations, a scaffold split is similar to a random split
-- Show that naive scaffold splitting fails to create meaningful distribution shift
-- Compare with cluster-based split to demonstrate when scaffold splits are and aren't useful
-- Quantify the similarity between scaffold and random split performance
+- **Key finding**: Naive Bemis-Murcko scaffold split produces nearly identical performance to random split:
+  - Random MA-RAE: 0.479, Scaffold MA-RAE: 0.536, Cluster MA-RAE: 0.723
+  - Scaffold-random RAE gap: only 0.04–0.09 per endpoint (negligible)
+  - Scaffold-cluster RAE gap: 0.17–0.29 per endpoint (substantial)
+  - 1-NN median distances: scaffold 0.246 vs random 0.203 vs cluster 0.419
+- Scaffold splits fail because frequent scaffolds appear in both train and test — the split creates scaffold-level separation but not structural novelty. Cluster-based splitting enforces genuine chemical space separation
 
 #### 6c. Split variance study
 - Ref: Pat's blog — show the variance in performance when evaluating on different splits
@@ -205,23 +210,33 @@ This paper sits between a review and an opinion paper. Instead of prescriptive "
 
 #### 6d. Activity cliff evaluation
 - Ref: MoleculeACE
-- Identify activity cliffs in the dataset (pairs of structurally similar molecules with large differences in activity)
-- Set aside activity cliffs and evaluate model performance specifically on these pairs
-- Models that interpolate smoothly will fail on cliffs — a critical failure mode for lead optimization
+- Activity cliffs: pairs with Tanimoto similarity > 0.85 and activity difference in top quartile among similar pairs
+- **Key finding**: Cliff molecules (6–10% of molecules per endpoint) show consistently worse performance:
+  - Cliff RAE exceeds non-cliff RAE for 7 of 9 endpoints
+  - Worst case: Caco-2 Papp A>B cliff RAE = 1.050 (worse than mean) vs non-cliff RAE = 0.695
+  - R² goes negative for Caco-2 Papp A>B on cliffs (-0.187 vs 0.427 non-cliff)
+  - Spearman ρ consistently lower on cliffs across all 9 endpoints
+  - Two exceptions (MLM CLint, MBPB): cliff molecules show better performance, possibly because large value ranges in cliff pairs align with XGBoost's tree-splitting strengths
+- The effect is moderate but consistent — aggregate metrics obscure a known failure mode that matters for lead optimization
 
 #### 6e. Molecular variant consistency
 - Ref: Srijit's LinkedIn post
-- Set aside groups of related molecules: stereoisomers, tautomers, resonance (Kekule) structures, different protonation states, different decorations of a shared scaffold
-- Check for variance in model predictions across these groups
-- Consistent models should predict similar values for structurally minor variants
-- Exposes whether models learn chemistry or memorize fingerprint artifacts
+- Two variant types: stereoisomers (548 groups, 1,152 molecules, 15.1%) and scaffold decorations (1,050 groups, 3,835 molecules, 50.4%)
+- **Key finding — stereoisomer blindness**: ECFP4 produces *identical* bit vectors for stereoisomers (Tanimoto distance = 0.000 for all 679 pairs). Prediction CV = 0.000 across all 9 endpoints — not consistency through learning, but total blindness. Only 3 of ~200 RDKit 2D descriptors differ between stereoisomers (`NumAtomStereoCenters`, `NumUnspecifiedAtomStereoCenters`, `Ipc`), contributing negligibly. The model cannot distinguish enantiomers that may have genuinely different biological activity.
+- **Key finding — scaffold decoration amplification**: Scaffold decoration groups show median fingerprint distance 0.351 and prediction CV 2–3× lower than random pairs (good — model learns scaffold-level trends). However, consistency ratios > 1 across most endpoints (up to 4.6× for KSOL) indicate the model amplifies substituent effects beyond true biological variation.
+- **Interpretation**: Two distinct failure modes — representation blindness (stereoisomers: model can't see the variation) and representation amplification (scaffold decorations: model over-reacts to fingerprint changes). "Consistent" predictions for stereoisomers is paradoxically a *worse* failure than inconsistency.
 
 ## Discussion
 
 ### Summary
-- Random splits systematically overestimate performance; our case studies quantify the gap and reveal specific failure modes
+- Random splits systematically overestimate performance by 51% (MA-RAE 0.479 vs 0.726 with cluster-based splitting); scaffold splits offer no meaningful improvement (MA-RAE 0.536)
+- The case studies reveal four complementary failure modes that aggregate metrics obscure:
+  - **Extrapolation failure** (IID vs OOD): 1.2–12.9× worse performance across chemical series boundaries, R² negative for 7/8 endpoints
+  - **Interpolation failure** (activity cliffs): 6–10% of molecules show systematically higher error, cliff RAE > 1.0 for Caco-2 Papp
+  - **Representation failure** (molecular variants): ECFP4 is completely blind to stereochemistry (15% of dataset invisible); scaffold decorations amplified beyond true biological variation
+  - **Evaluation failure** (scaffold ≈ random; split variance): random CV gives precise estimates of the wrong thing; single cluster-split R² spans 0.11–0.45 for MLM CLint
 - The framework connects evaluation choices to deployment scenarios (hit identification vs. lead optimization)
-- The Expansion Tx dataset uniquely enables these analyses due to its real-world provenance
+- The Expansion Tx dataset uniquely enables these analyses due to its real-world provenance (ordinal ordering, chemical series, multi-endpoint coverage)
 
 ### Limitations
 - Single therapeutic area (RNA-small molecule) — compounds may have different properties from protein modulators; generalizability of findings to other target classes is unknown
@@ -230,6 +245,7 @@ This paper sits between a review and an opinion paper. Instead of prescriptive "
 - Distance metric choice (ECFP4 + Tanimoto) is pragmatic but endpoint-specific metrics could perform better
 - Data curation assumed — we provide high-level criteria but detailed curation guidance is out of scope (planned for future work)
 - CRO consistency not fully characterized (pending annotation availability)
+- ECFP4 default configuration does not encode stereochemistry (`useChirality=False`); chiral fingerprints or 3D descriptors would address stereoisomer blindness but were not tested
 
 ### Community Opportunities
 - Framework is extensible to any ADMET dataset — code and methodology will be open-sourced
@@ -291,7 +307,7 @@ This paper sits between a review and an opinion paper. Instead of prescriptive "
 | Fig S1 | Scaffold vs random split | NB 2.11 | Demonstrating naive scaffold split ≈ random split |
 | Fig S2 | Split variance analysis | NB 2.12 | Random splits give false confidence (tight CI, optimistic); cluster splits reveal true uncertainty (wide CI, honest). 20 random + 5 cluster repeats |
 | Fig S3 | Activity cliff evaluation | NB 2.10 | Model performance on activity cliff pairs |
-| Fig S4 | Molecular variant consistency | NB 2.13 | Prediction variance across stereoisomers, tautomers, etc. |
+| Fig S4 | Molecular variant consistency | NB 2.13 | ECFP4 stereochemistry blindness (distance = 0.000, prediction CV = 0.000); scaffold decoration amplification (consistency ratio > 1); comparison to random-pair baseline |
 
 ## Key References
 
