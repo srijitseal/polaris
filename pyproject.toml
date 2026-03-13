@@ -35,6 +35,7 @@ polaris_generalization = { path = ".", editable = true }
 
 [tool.pixi.dependencies]
 python = "3.12.*"
+pandoc = ">=3.9,<4"
 
 [tool.pixi.tasks]
 download = "bash scripts/download_data.sh"

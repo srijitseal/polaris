@@ -112,6 +112,10 @@ data/
 # Claude
 .claude/settings.local.json
 
+# Manuscript outputs
+docs/paper/manuscript.md
+docs/paper/manuscript.docx
+
 # Misc
 .direnv
 scratch/
