@@ -101,7 +101,7 @@ def compute_ecfp4(smiles_list: list[str], nbits: int = 2048, radius: int = 2) ->
         if mol is None:
             fps.append(np.zeros(nbits, dtype=np.uint8))
         else:
-            fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius, nBits=nbits)
+            fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius, nBits=nbits, useChirality=True)
             fps.append(np.array(fp, dtype=np.uint8))
     return np.vstack(fps)
 
