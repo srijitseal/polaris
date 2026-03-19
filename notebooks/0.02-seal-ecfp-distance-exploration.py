@@ -43,7 +43,7 @@ def compute_ecfp4(smiles_list: list[str], nbits: int = 2048, radius: int = 2) ->
             fps.append(None)
             failed += 1
         else:
-            fps.append(AllChem.GetMorganFingerprintAsBitVect(mol, radius, nBits=nbits))
+            fps.append(AllChem.GetMorganFingerprintAsBitVect(mol, radius, nBits=nbits, useChirality=True))
     if failed > 0:
         logger.warning(f"{failed} SMILES failed to parse")
     return fps
@@ -97,7 +97,7 @@ def main(
     df = pd.concat([train, test], ignore_index=True)
     logger.info(f"Combined: {len(df)} molecules")
 
-    logger.info("Computing ECFP4 fingerprints (2048-bit, radius 2)")
+    logger.info("Computing ECFP4 fingerprints (2048-bit, radius 2, chirality-aware)")
     fps = compute_ecfp4(df["SMILES"].tolist())
 
     # Filter out failed parses
