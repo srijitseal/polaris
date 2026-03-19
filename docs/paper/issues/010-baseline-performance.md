@@ -13,20 +13,21 @@ Training XGBoost on ECFP4 fingerprints + RDKit 2D descriptors with per-endpoint 
 | RF (100 trees, default params, raw-scale training, log-eval only) | 0.892 |
 | RF (500 trees, tuned params, log-scale training + eval) | 0.868 |
 | XGBoost (tuned, ECFP4 + 16 physchem, log-scale train + eval) | 0.826 |
-| **XGBoost (tuned, ECFP4 + full RDKit 2D, dimorphite_dl protonation)** | **0.820** |
+| XGBoost (tuned, ECFP4 + full RDKit 2D, dimorphite_dl protonation) | 0.820 |
+| **XGBoost (tuned, chiral ECFP4 + full RDKit 2D, dimorphite_dl protonation)** | **0.821** |
 
 ### Per-endpoint results (final: XGBoost + full RDKit 2D + protonation)
 
 | Endpoint | pH | R² | Spearman ρ | RAE | n_train | n_test |
 |----------|-----|-----|-----------|-----|---------|--------|
-| LogD | 7.4 | 0.534 | 0.719 | 0.663 | 5,039 | 2,270 |
-| KSOL | 7.4 | 0.199 | 0.457 | 0.878 | 5,128 | 2,170 |
-| HLM CLint | 7.4 | 0.170 | 0.546 | 0.889 | 3,759 | 782 |
-| MLM CLint | 7.4 | 0.210 | 0.496 | 0.912 | 4,522 | 1,170 |
-| Caco-2 Papp A>B | 6.5 | 0.105 | 0.437 | 0.903 | 2,157 | 1,616 |
-| Caco-2 Efflux | 6.5 | 0.128 | 0.600 | 0.799 | 2,161 | 1,616 |
-| MPPB | 7.4 | 0.140 | 0.506 | 0.913 | 1,302 | 454 |
-| MBPB | 7.4 | 0.398 | 0.696 | 0.702 | 975 | 451 |
+| LogD | 7.4 | 0.523 | 0.715 | 0.664 | 5,039 | 2,270 |
+| KSOL | 7.4 | 0.245 | 0.463 | 0.842 | 5,128 | 2,170 |
+| HLM CLint | 7.4 | 0.139 | 0.530 | 0.913 | 3,759 | 782 |
+| MLM CLint | 7.4 | 0.194 | 0.476 | 0.920 | 4,522 | 1,170 |
+| Caco-2 Papp A>B | 6.5 | 0.163 | 0.498 | 0.876 | 2,157 | 1,616 |
+| Caco-2 Efflux | 6.5 | 0.121 | 0.609 | 0.808 | 2,161 | 1,616 |
+| MPPB | 7.4 | 0.142 | 0.508 | 0.912 | 1,302 | 454 |
+| MBPB | 7.4 | 0.429 | 0.699 | 0.677 | 975 | 451 |
 | MGMB | 7.4 | 0.347 | 0.732 | 0.780 | 222 | 209 |
 
 ### Key insight: log-transform is essential

@@ -150,7 +150,7 @@ def compute_tanimoto_distances_within_group(
         if mol is None:
             fps.append(None)
         else:
-            fps.append(AllChem.GetMorganFingerprintAsBitVect(mol, radius, nBits=nbits))
+            fps.append(AllChem.GetMorganFingerprintAsBitVect(mol, radius, nBits=nbits, useChirality=True))
 
     distances = []
     for i, j in combinations(range(len(fps)), 2):

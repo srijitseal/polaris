@@ -20,9 +20,9 @@ Naive Bemis-Murcko scaffold splits produce nearly identical XGBoost performance 
 
 | Strategy | MA-RAE |
 |----------|--------|
-| Random | 0.479 |
-| Scaffold | 0.536 |
-| Cluster | 0.723 |
+| Random | 0.480 |
+| Scaffold | 0.534 |
+| Cluster | 0.724 |
 
 Scaffold and random splits produce similar metrics across all endpoints. Cluster-based splitting consistently produces worse performance — higher MAE, higher RAE, lower R², lower rank correlations — reflecting genuine distribution shift.
 
@@ -30,41 +30,41 @@ Scaffold and random splits produce similar metrics across all endpoints. Cluster
 
 | Endpoint | Scaffold | Random | Cluster |
 |----------|----------|--------|---------|
-| LogD | 0.399 | 0.358 | 0.560 |
-| KSOL | 0.566 | 0.507 | 0.763 |
-| HLM CLint | 0.662 | 0.609 | 0.843 |
-| MLM CLint | 0.598 | 0.553 | 0.786 |
-| Caco-2 Papp A>B | 0.517 | 0.467 | 0.757 |
-| Caco-2 Efflux | 0.450 | 0.423 | 0.651 |
-| MPPB | 0.573 | 0.490 | 0.756 |
-| MBPB | 0.491 | 0.419 | 0.642 |
-| MGMB | 0.572 | 0.481 | 0.745 |
+| LogD | 0.397 | 0.365 | 0.545 |
+| KSOL | 0.564 | 0.511 | 0.726 |
+| HLM CLint | 0.661 | 0.614 | 0.877 |
+| MLM CLint | 0.602 | 0.548 | 0.790 |
+| Caco-2 Papp A>B | 0.514 | 0.475 | 0.710 |
+| Caco-2 Efflux | 0.456 | 0.421 | 0.655 |
+| MPPB | 0.563 | 0.486 | 0.720 |
+| MBPB | 0.493 | 0.423 | 0.657 |
+| MGMB | 0.561 | 0.480 | 0.838 |
 
-Scaffold–random RAE differences are 0.04–0.09 (small). Cluster–random differences are 0.17–0.29 (large, consistent).
+Scaffold–random RAE differences are 0.03–0.08 (small). Cluster–random differences are 0.18–0.36 (large, consistent).
 
 ### Per-endpoint R² (mean across folds)
 
 | Endpoint | Scaffold | Random | Cluster |
 |----------|----------|--------|---------|
-| LogD | 0.818 | 0.847 | 0.648 |
-| KSOL | 0.565 | 0.641 | 0.327 |
-| HLM CLint | 0.524 | 0.583 | 0.248 |
-| MLM CLint | 0.613 | 0.663 | 0.316 |
-| Caco-2 Papp A>B | 0.645 | 0.703 | 0.331 |
-| Caco-2 Efflux | 0.718 | 0.750 | 0.493 |
-| MPPB | 0.612 | 0.698 | 0.374 |
-| MBPB | 0.680 | 0.745 | 0.504 |
-| MGMB | 0.564 | 0.666 | 0.338 |
+| LogD | 0.820 | 0.842 | 0.672 |
+| KSOL | 0.565 | 0.637 | 0.377 |
+| HLM CLint | 0.523 | 0.581 | 0.164 |
+| MLM CLint | 0.610 | 0.671 | 0.338 |
+| Caco-2 Papp A>B | 0.650 | 0.696 | 0.396 |
+| Caco-2 Efflux | 0.715 | 0.753 | 0.470 |
+| MPPB | 0.621 | 0.706 | 0.438 |
+| MBPB | 0.678 | 0.748 | 0.509 |
+| MGMB | 0.572 | 0.671 | 0.117 |
 
 ### Distance distributions
 
 | Strategy | Median 1-NN | Mean 1-NN | Q75 | Q90 |
 |----------|-------------|-----------|-----|-----|
-| Random | 0.203 | 0.201 | 0.264 | 0.328 |
-| Scaffold | 0.246 | 0.243 | 0.314 | 0.387 |
-| Cluster | 0.419 | 0.427 | 0.521 | 0.613 |
+| Random | 0.203 | 0.210 | 0.264 | 0.328 |
+| Scaffold | 0.246 | 0.248 | 0.314 | 0.387 |
+| Cluster | 0.424 | 0.431 | 0.524 | 0.619 |
 
-Scaffold and random 1-NN distributions overlap substantially (medians 0.246 vs 0.203). The cluster-based split produces a right-shifted distribution with ~2× larger median distance (0.419), confirming genuine structural separation.
+Scaffold and random 1-NN distributions overlap substantially (medians 0.246 vs 0.203). The cluster-based split produces a right-shifted distribution with ~2× larger median distance (0.424), confirming genuine structural separation.
 
 ### Interpretation
 

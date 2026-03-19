@@ -1,8 +1,8 @@
-# Three dominant chemical series account for 63% of the dataset
+# Three dominant chemical series account for 62.5% of the dataset
 
 ## Summary
 
-Butina clustering (cutoff 0.7) on the Expansion Tx dataset (7,608 molecules) reveals 135 clusters with highly concentrated chemical series structure: three clusters contain 4,769 molecules (63%), while 33 clusters (24%) are singletons. This concentration has major implications for splitting strategies — naive random splits will leak series information between train and test.
+Butina clustering (cutoff 0.7) on the Expansion Tx dataset (7,608 molecules) reveals 135 clusters with highly concentrated chemical series structure: three clusters contain 4,758 molecules (62.5%), while 33 clusters (24%) are singletons. This concentration has major implications for splitting strategies — naive random splits will leak series information between train and test.
 
 ## Key Findings
 
@@ -13,11 +13,11 @@ Butina clustering (cutoff 0.7) on the Expansion Tx dataset (7,608 molecules) rev
 | Total clusters | 135 |
 | Singletons | 33 (24.4%) |
 | Median cluster size | 4 |
-| Top 5 sizes | 2,578 / 1,306 / 885 / 258 / 70 |
+| Top 5 sizes | 2,572 / 1,301 / 885 / 762 / 282 |
 
 ### Key observations
 
-- **Highly concentrated series**: The largest cluster (2,578 molecules, 34%) dominates the dataset. Together with clusters 2 (1,306) and 3 (885), these three series contain 63% of all molecules.
+- **Highly concentrated series**: The largest cluster (2,572 molecules, 34%) dominates the dataset. Together with clusters 2 (1,301) and 3 (885), these three series contain 62.5% of all molecules.
 - **Long tail**: Beyond the top 5 clusters, most clusters have fewer than 10 members. The median cluster size of 4 reflects this skewed distribution.
 - **Singletons indicate scaffold diversity**: 33 molecules have no neighbor within Tanimoto distance 0.7, representing truly unique scaffolds.
 - **Implications for splitting**: Random splits will place members of the same large cluster in both train and test, inflating performance. Cluster-based splits (notebook 2.03) should use these clusters to create meaningful distribution shift.

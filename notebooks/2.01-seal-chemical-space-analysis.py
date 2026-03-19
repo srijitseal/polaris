@@ -87,7 +87,8 @@ def main(
     # ── 2. Butina clustering ──────────────────────────────────────────
     clusters = butina_cluster(dist_square, cutoff=cutoff)
 
-    # Assign cluster IDs (Butina returns tuples sorted by size, largest first)
+    # Assign cluster IDs sorted by size (largest first)
+    clusters = sorted(clusters, key=len, reverse=True)
     cluster_ids = np.full(len(df), -1, dtype=int)
     cluster_sizes_map = {}
     for cid, members in enumerate(clusters):

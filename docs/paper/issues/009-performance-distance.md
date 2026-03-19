@@ -10,59 +10,59 @@ Training XGBoost (fixed architecture) on ECFP4 + full RDKit 2D descriptors (~200
 
 | Strategy | MA-RAE | Interpretation |
 |----------|--------|----------------|
-| Cluster | **0.726** | Standard 5-fold CV, ~80:20 per fold |
-| Time | 0.837 | Expanding window (50:50 → 80:20), temporal ordering |
-| Target | 6.927 | By design creates impossible extrapolation tasks |
+| Cluster | **0.732** | Standard 5-fold CV, ~80:20 per fold |
+| Time | 0.839 | Expanding window (50:50 → 80:20), temporal ordering |
+| Target | 6.909 | By design creates impossible extrapolation tasks |
 
 ### Per-endpoint metrics (cluster-split, mean across 5 folds)
 
 | Endpoint | MAE | R² | Spearman ρ | RAE |
 |----------|-----|-----|-----------|-----|
-| LogD | 0.502 | 0.659 | 0.824 | 0.557 |
-| Caco-2 Efflux | 0.237 | 0.483 | 0.654 | 0.672 |
-| MBPB | 0.246 | 0.453 | 0.696 | 0.700 |
-| KSOL | 0.422 | 0.383 | 0.556 | 0.743 |
-| MPPB | 0.279 | 0.377 | 0.632 | 0.771 |
-| MLM CLint | 0.418 | 0.370 | 0.592 | 0.750 |
-| Caco-2 Papp | 0.279 | 0.367 | 0.664 | 0.756 |
-| MGMB | 0.219 | 0.363 | 0.607 | 0.755 |
-| HLM CLint | 0.379 | 0.273 | 0.562 | 0.830 |
+| LogD | 0.482 | 0.680 | 0.828 | 0.542 |
+| Caco-2 Efflux | 0.248 | 0.475 | 0.673 | 0.666 |
+| MBPB | 0.242 | 0.482 | 0.702 | 0.695 |
+| KSOL | 0.432 | 0.390 | 0.534 | 0.728 |
+| Caco-2 Papp | 0.269 | 0.391 | 0.606 | 0.742 |
+| MLM CLint | 0.413 | 0.387 | 0.623 | 0.753 |
+| MPPB | 0.276 | 0.399 | 0.682 | 0.764 |
+| MGMB | 0.229 | 0.194 | 0.619 | 0.853 |
+| HLM CLint | 0.395 | 0.219 | 0.522 | 0.843 |
 
 ### Per-endpoint metrics (time-split, mean across 4 folds)
 
 | Endpoint | MAE | R² | Spearman ρ | RAE |
 |----------|-----|-----|-----------|-----|
-| LogD | 0.525 | 0.608 | 0.777 | 0.609 |
-| MBPB | 0.262 | 0.348 | 0.664 | 0.790 |
-| Caco-2 Papp | 0.282 | 0.290 | 0.595 | 0.789 |
-| KSOL | 0.476 | 0.271 | 0.493 | 0.823 |
-| HLM CLint | 0.388 | 0.256 | 0.548 | 0.850 |
-| MPPB | 0.293 | 0.227 | 0.533 | 0.864 |
-| Caco-2 Efflux | 0.288 | 0.198 | 0.590 | 0.788 |
-| MLM CLint | 0.466 | 0.106 | 0.473 | 0.909 |
-| MGMB | 0.260 | -0.156 | 0.506 | 1.107 |
+| LogD | 0.528 | 0.602 | 0.772 | 0.613 |
+| MBPB | 0.262 | 0.349 | 0.665 | 0.790 |
+| Caco-2 Papp | 0.288 | 0.264 | 0.575 | 0.804 |
+| KSOL | 0.482 | 0.240 | 0.487 | 0.836 |
+| HLM CLint | 0.387 | 0.255 | 0.541 | 0.849 |
+| MPPB | 0.294 | 0.224 | 0.532 | 0.866 |
+| Caco-2 Efflux | 0.284 | 0.221 | 0.589 | 0.779 |
+| MLM CLint | 0.468 | 0.093 | 0.460 | 0.913 |
+| MGMB | 0.259 | -0.149 | 0.511 | 1.101 |
 
 ### Structural distance degradation
 
 | Endpoint | Cluster | Time | Target |
 |----------|---------|------|--------|
-| LogD | **2.89x** | 2.71x | 1.25x |
-| MGMB | **2.89x** | 1.76x | 0.92x |
-| HLM CLint | **2.75x** | 1.63x | 1.12x |
-| MPPB | **2.33x** | 2.07x | 0.94x |
-| MLM CLint | **2.21x** | 2.62x | 1.14x |
-| KSOL | **1.94x** | 1.53x | 1.43x |
-| MBPB | **1.93x** | 1.67x | 0.70x |
-| Caco-2 Papp | **1.06x** | 1.00x | 1.04x |
-| Caco-2 Efflux | 1.03x | 1.11x | 0.36x |
+| LogD | **3.98x** | 2.44x | 1.18x |
+| HLM CLint | **3.19x** | 1.88x | 1.09x |
+| MLM CLint | **1.95x** | 2.54x | 1.11x |
+| KSOL | **1.90x** | 1.52x | 1.42x |
+| MBPB | **1.83x** | 1.54x | 0.75x |
+| MPPB | **1.71x** | 2.06x | 0.95x |
+| MGMB | **1.51x** | 1.72x | 0.91x |
+| Caco-2 Papp | **1.13x** | 0.80x | 1.12x |
+| Caco-2 Efflux | 1.05x | 1.85x | 0.35x |
 
 ### Interpretation
 
-- **Cluster-split** (MA-RAE 0.726) gives the best overall performance since each fold sees structurally diverse training data. R² ranges from 0.27 (HLM CLint) to 0.66 (LogD). Structural degradation is 2-3x for most endpoints.
-- **Time-split** (MA-RAE 0.837) is worse because early folds have small training sets (expanding window starts at 50:50). R² drops below 0 for MGMB where training data is smallest (86 molecules at fold 0).
-- **Target-split** (MA-RAE 6.927) produces catastrophically negative R² across all endpoints. This is by design — folds are ordered by target value, so test molecules systematically fall outside the training distribution in target space. Spearman correlations collapse to near-zero (~0.01–0.07), confirming the model cannot rank molecules it hasn't seen in the relevant value range.
-- **Caco-2 endpoints show minimal structural degradation** (1.0–1.1x for cluster) — suggesting less structural diversity between clusters or better generalization for permeability.
-- **Comparison to 2.08 baseline** (MA-RAE 0.820 on competition split): cluster-split CV gives a more optimistic estimate (0.726) than the held-out test set, which is expected — the competition split likely contains more structurally novel molecules.
+- **Cluster-split** (MA-RAE 0.732) gives the best overall performance since each fold sees structurally diverse training data. R² ranges from 0.19 (MGMB) to 0.68 (LogD). Structural degradation is 2-4x for LogD and HLM CLint, 1.5-2x for most others.
+- **Time-split** (MA-RAE 0.839) is worse because early folds have small training sets (expanding window starts at 50:50). R² drops below 0 for MGMB where training data is smallest (86 molecules at fold 0).
+- **Target-split** (MA-RAE 6.909) produces catastrophically negative R² across all endpoints. This is by design — folds are ordered by target value, so test molecules systematically fall outside the training distribution in target space. Spearman correlations collapse to near-zero (~0.01–0.07), confirming the model cannot rank molecules it hasn't seen in the relevant value range.
+- **Caco-2 endpoints show minimal structural degradation** (1.1x for cluster) — suggesting less structural diversity between clusters or better generalization for permeability.
+- **Comparison to 2.08 baseline** (MA-RAE 0.821 on competition split): cluster-split CV gives a more optimistic estimate (0.732) than the held-out test set, which is expected — the competition split likely contains more structurally novel molecules.
 
 ## Model
 

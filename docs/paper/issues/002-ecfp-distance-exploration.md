@@ -2,7 +2,7 @@
 
 ## Summary
 
-ECFP4 Tanimoto distance analysis of the Expansion Tx dataset (7,608 molecules) reveals moderate chemical diversity (1-NN median 0.20) with a clear distribution shift between train and test: test-to-train 1-NN median (0.375) is nearly double the within-train 1-NN median (0.203), confirming the competition split creates a meaningful generalization challenge.
+ECFP4 Tanimoto distance analysis of the Expansion Tx dataset (7,608 molecules) reveals moderate chemical diversity (1-NN median 0.20) with a clear distribution shift between train and test: test-to-train 1-NN median (0.373) is nearly double the within-train 1-NN median (0.203), confirming the competition split creates a meaningful generalization challenge.
 
 ## Key Findings
 
@@ -11,15 +11,15 @@ ECFP4 Tanimoto distance analysis of the Expansion Tx dataset (7,608 molecules) r
 | Metric | Count | Mean | Median | Q1 | Q3 |
 |--------|-------|------|--------|----|----|
 | All pairwise | 28.9M | 0.824 | 0.851 | 0.802 | 0.879 |
-| 1-NN | 7,608 | 0.207 | 0.200 | 0.157 | 0.250 |
-| 5-NN | 7,608 | 0.322 | 0.311 | 0.250 | 0.377 |
-| Test-to-train 1-NN | 2,282 | 0.387 | 0.375 | 0.254 | 0.516 |
-| Within-train 1-NN | 5,326 | 0.195 | 0.203 | 0.153 | 0.255 |
+| 1-NN | 7,608 | 0.195 | 0.190 | 0.145 | 0.246 |
+| 5-NN | 7,608 | 0.321 | 0.310 | 0.250 | 0.375 |
+| Test-to-train 1-NN | 2,282 | 0.387 | 0.373 | 0.255 | 0.516 |
+| Within-train 1-NN | 5,326 | 0.205 | 0.203 | 0.155 | 0.257 |
 
 ### Key observations
 
-- **Chemical diversity**: 1-NN median of 0.20 indicates many molecules have close neighbors — consistent with chemical series structure. The all-pairwise median of 0.85 confirms the dataset spans diverse scaffolds overall.
-- **Distribution shift in competition split**: Test-to-train 1-NN median (0.375) vs within-train (0.203) — the test set is substantially farther from training data, creating a real OOD evaluation.
+- **Chemical diversity**: 1-NN median of 0.19 indicates many molecules have close neighbors — consistent with chemical series structure. The all-pairwise median of 0.85 confirms the dataset spans diverse scaffolds overall.
+- **Distribution shift in competition split**: Test-to-train 1-NN median (0.373) vs within-train (0.203) — the test set is substantially farther from training data, creating a real OOD evaluation.
 - **Long tail in test distances**: Test-to-train 1-NN extends to 0.73, with broad distribution from 0.1 to 0.7 — many test molecules have no close training analog.
 - **Spike at zero in within-train**: Large spike at distance ~0 in within-train 1-NN indicates near-duplicate or very similar compounds within the training set (likely from same chemical series).
 

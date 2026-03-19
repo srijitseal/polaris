@@ -17,15 +17,15 @@ Random 5-fold CV produces remarkably tight variance (RAE std 0.002–0.012) but 
 
 | Endpoint | Random RAE (mean±std) | Random range | Cluster RAE (mean±std) | Cluster range |
 |----------|----------------------|-------------|----------------------|--------------|
-| LogD | 0.358±0.002 | 0.009 | 0.570±0.023 | 0.061 |
-| KSOL | 0.513±0.004 | 0.013 | 0.729±0.020 | 0.057 |
-| HLM CLint | 0.604±0.005 | 0.018 | 0.873±0.031 | 0.081 |
-| MLM CLint | 0.550±0.003 | 0.011 | 0.795±0.060 | 0.185 |
-| Caco-2 Papp A>B | 0.473±0.004 | 0.014 | 0.712±0.029 | 0.082 |
-| Caco-2 Efflux | 0.424±0.004 | 0.019 | 0.654±0.047 | 0.136 |
-| MPPB | 0.493±0.007 | 0.021 | 0.757±0.034 | 0.101 |
-| MBPB | 0.422±0.005 | 0.019 | 0.651±0.038 | 0.108 |
-| MGMB | 0.483±0.012 | 0.055 | 0.691±0.051 | 0.133 |
+| LogD | 0.359±0.003 | — | 0.566±0.016 | — |
+| KSOL | 0.512±0.004 | — | 0.741±0.012 | — |
+| HLM CLint | 0.607±0.005 | — | 0.869±0.034 | — |
+| MLM CLint | 0.552±0.004 | — | 0.786±0.024 | — |
+| Caco-2 Papp A>B | 0.475±0.003 | — | 0.708±0.034 | — |
+| Caco-2 Efflux | 0.425±0.005 | — | 0.686±0.049 | — |
+| MPPB | 0.492±0.007 | — | 0.731±0.024 | — |
+| MBPB | 0.424±0.007 | — | 0.670±0.016 | — |
+| MGMB | 0.481±0.011 | — | 0.685±0.083 | — |
 
 Random splits show tight variance (range 0.009–0.055). Cluster splits show 3–17× wider ranges (0.057–0.185), with MLM CLint having the most extreme variance (RAE range 0.718–0.903).
 
@@ -33,17 +33,17 @@ Random splits show tight variance (range 0.009–0.055). Cluster splits show 3�
 
 | Endpoint | Random R² (mean±std) | Random range | Cluster R² (mean±std) | Cluster range |
 |----------|---------------------|-------------|----------------------|--------------|
-| LogD | 0.849±0.002 | 0.010 | 0.644±0.026 | 0.072 |
-| KSOL | 0.632±0.005 | 0.018 | 0.357±0.022 | 0.064 |
-| HLM CLint | 0.586±0.006 | 0.026 | 0.193±0.056 | 0.147 |
-| MLM CLint | 0.663±0.004 | 0.016 | 0.320±0.118 | 0.345 |
-| Caco-2 Papp A>B | 0.700±0.005 | 0.018 | 0.395±0.044 | 0.117 |
-| Caco-2 Efflux | 0.746±0.006 | 0.028 | 0.483±0.064 | 0.187 |
-| MPPB | 0.694±0.010 | 0.034 | 0.380±0.042 | 0.117 |
-| MBPB | 0.748±0.009 | 0.040 | 0.498±0.043 | 0.122 |
-| MGMB | 0.647±0.018 | 0.086 | 0.398±0.075 | 0.187 |
+| LogD | 0.849±0.003 | 0.013 | 0.648±0.020 | 0.057 |
+| KSOL | 0.634±0.005 | 0.021 | 0.356±0.014 | 0.044 |
+| HLM CLint | 0.584±0.007 | 0.025 | 0.191±0.058 | 0.164 |
+| MLM CLint | 0.661±0.005 | 0.020 | 0.339±0.045 | 0.139 |
+| Caco-2 Papp A>B | 0.698±0.003 | 0.015 | 0.401±0.041 | 0.126 |
+| Caco-2 Efflux | 0.746±0.008 | 0.034 | 0.423±0.065 | 0.179 |
+| MPPB | 0.696±0.008 | 0.031 | 0.409±0.038 | 0.098 |
+| MBPB | 0.747±0.010 | 0.033 | 0.467±0.028 | 0.084 |
+| MGMB | 0.646±0.017 | 0.083 | 0.377±0.142 | 0.414 |
 
-Cluster-split R² ranges are dramatic: MLM CLint spans 0.109–0.454 across 5 repeats — a single split could report either "poor" or "moderate" performance depending on the random seed.
+Cluster-split R² ranges are dramatic: MGMB spans 0.117–0.531 across 5 repeats — a single split could report either "poor" or "moderate" performance depending on the random seed.
 
 ### MA-RAE distribution
 
@@ -62,7 +62,7 @@ Cluster-based CV is genuinely variable because different EKM + KMeans seeds crea
 
 The practical takeaway is twofold:
 1. **Choosing the right splitting strategy matters far more than running more repeats.** Twenty random repeats with tight CIs give false confidence; five cluster repeats with wide CIs give an honest picture.
-2. **Report confidence intervals from distance-aware splits.** A single cluster-split could report R²=0.11 or R²=0.45 for MLM CLint — only the mean across repeats (0.32) with its CI gives the full story.
+2. **Report confidence intervals from distance-aware splits.** A single cluster-split could report R²=0.12 or R²=0.53 for MGMB — only the mean across repeats (0.38) with its CI gives the full story.
 
 ## Plots
 

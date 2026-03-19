@@ -8,23 +8,23 @@ Cross-strategy comparison of cluster-split, time-split, and target-split on LogD
 
 ### Fold sizes
 
-All strategies produce reasonably balanced folds. Cluster-split (5 folds) ranges 1,367–1,549; time-split and target-split (4 folds each) range ~1,461–1,465. No fold falls below 10% or above 40% of the data.
+All strategies produce reasonably balanced folds. Cluster-split (5 folds) ranges 1,422–1,507; time-split and target-split (4 folds each) range ~1,461–1,465. No fold falls below 10% or above 40% of the data.
 
 ### Structural distances (test-to-train 1-NN)
 
 | Strategy | Median 1-NN range | Interpretation |
 |----------|-------------------|----------------|
-| Cluster-split | 0.363–0.471 | Highest — tests structural generalization |
-| Time-split | 0.302–0.386 | Moderate — temporal drift includes some series continuity |
+| Cluster-split | 0.369–0.440 | Highest — tests structural generalization |
+| Time-split | 0.301–0.386 | Moderate — temporal drift includes some series continuity |
 | Target-split | 0.245–0.286 | Lowest — similar values ≈ similar structures |
 
 ### Structural overlap (% test with 1-NN < 0.1)
 
 | Strategy | Overlap range |
 |----------|--------------|
-| Cluster-split | 0.0–0.1% |
-| Time-split | 0.9–1.5% |
-| Target-split | 3.9–4.7% |
+| Cluster-split | 0.0% |
+| Time-split | 0.8–1.4% |
+| Target-split | 2.9–4.0% |
 
 Cluster-split effectively eliminates near-duplicates between train and test. Target-split retains the most overlap, consistent with the observation that structurally similar molecules share similar property values.
 
@@ -32,9 +32,9 @@ Cluster-split effectively eliminates near-duplicates between train and test. Tar
 
 | Strategy | KS range | Interpretation |
 |----------|----------|----------------|
-| Cluster-split | 0.035–0.107 | Minimal shift — folds sample broadly |
-| Time-split | 0.040–0.093 | Minimal shift |
-| Target-split | 0.742–1.000 | Near-maximal — by design |
+| Cluster-split | 0.057–0.170 | Minimal shift — folds sample broadly |
+| Time-split | 0.056–0.268 | Low to moderate shift |
+| Target-split | 0.956–0.988 | Near-maximal — by design |
 
 ### UMAP visualization
 

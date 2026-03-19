@@ -20,15 +20,15 @@ Activity cliffs — pairs of structurally similar molecules (Tanimoto similarity
 
 | Endpoint | n molecules | n cliff pairs | n cliff mols | % cliff | diff threshold |
 |----------|------------|--------------|-------------|---------|---------------|
-| LogD | 7,309 | 555 | 729 | 10.0% | 0.600 |
-| KSOL | 7,298 | 548 | 701 | 9.6% | 0.302 |
-| Caco-2 Papp A>B | 3,773 | 246 | 377 | 10.0% | 0.202 |
-| Caco-2 Efflux | 3,777 | 246 | 340 | 9.0% | 0.269 |
-| HLM CLint | 4,541 | 252 | 388 | 8.5% | 0.396 |
-| MLM CLint | 5,692 | 355 | 440 | 7.7% | 0.503 |
-| MBPB | 1,426 | 52 | 96 | 6.7% | 0.154 |
-| MPPB | 1,756 | 65 | 115 | 6.5% | 0.247 |
-| MGMB | 431 | 15 | 27 | 6.3% | 0.259 |
+| LogD | 7,309 | 493 | 678 | 9.3% | 0.600 |
+| KSOL | 7,298 | 478 | 661 | 9.1% | 0.341 |
+| Caco-2 Papp A>B | 3,773 | 223 | 367 | 9.7% | 0.202 |
+| Caco-2 Efflux | 3,777 | 223 | 323 | 8.6% | 0.278 |
+| HLM CLint | 4,541 | 215 | 353 | 7.8% | 0.413 |
+| MLM CLint | 5,692 | 299 | 426 | 7.5% | 0.496 |
+| MBPB | 1,426 | 47 | 86 | 6.0% | 0.164 |
+| MPPB | 1,756 | 59 | 104 | 5.9% | 0.279 |
+| MGMB | 431 | 14 | 26 | 6.0% | 0.259 |
 
 Cliff prevalence scales with endpoint coverage — well-covered endpoints (LogD, KSOL) have more similar pairs and thus more cliffs.
 
@@ -36,19 +36,19 @@ Cliff prevalence scales with endpoint coverage — well-covered endpoints (LogD,
 
 | Endpoint | Non-cliff RAE | Cliff RAE | Non-cliff R² | Cliff R² | Non-cliff Spearman | Cliff Spearman |
 |----------|-------------|-----------|-------------|---------|-------------------|---------------|
-| Caco-2 Papp A>B | 0.695 | **1.050** | 0.427 | -0.187 | 0.651 | 0.329 |
-| MPPB | 0.718 | 0.914 | 0.429 | 0.102 | 0.659 | 0.479 |
-| Caco-2 Efflux | 0.609 | 0.819 | 0.544 | 0.195 | 0.700 | 0.580 |
-| MGMB | 0.608 | 0.772 | 0.515 | 0.233 | 0.725 | 0.550 |
-| KSOL | 0.724 | 0.837 | 0.386 | 0.224 | 0.554 | 0.450 |
-| HLM CLint | 0.799 | 0.872 | 0.316 | 0.179 | 0.573 | 0.469 |
-| MLM CLint | 0.764 | 0.685 | 0.404 | 0.489 | 0.618 | 0.728 |
-| MBPB | 0.623 | 0.622 | 0.528 | 0.575 | 0.743 | 0.761 |
-| LogD | 0.553 | 0.605 | 0.660 | 0.544 | 0.813 | 0.767 |
+| HLM CLint | 0.857 | 0.901 | 0.213 | 0.128 | 0.505 | 0.371 |
+| Caco-2 Efflux | 0.641 | 0.882 | 0.503 | 0.101 | 0.690 | 0.507 |
+| MPPB | 0.683 | 0.868 | 0.495 | 0.090 | 0.698 | 0.392 |
+| KSOL | 0.717 | 0.849 | 0.390 | 0.205 | 0.538 | 0.417 |
+| Caco-2 Papp A>B | 0.653 | 0.838 | 0.465 | 0.230 | 0.678 | 0.535 |
+| MGMB | 0.625 | 0.770 | 0.493 | 0.179 | 0.713 | 0.456 |
+| MLM CLint | 0.752 | 0.703 | 0.423 | 0.455 | 0.616 | 0.700 |
+| LogD | 0.529 | 0.614 | 0.695 | 0.552 | 0.828 | 0.751 |
+| MBPB | 0.639 | 0.524 | 0.520 | 0.698 | 0.726 | 0.858 |
 
-Cliff RAE exceeds non-cliff RAE for 7 of 9 endpoints. The effect is most dramatic for Caco-2 Papp A>B (cliff RAE > 1.0, meaning worse than predicting the mean) and Caco-2 Efflux. The two exceptions — MLM CLint and MBPB — show cliff molecules with *better* performance, possibly because cliff pairs in these endpoints have large value ranges that XGBoost handles via tree splitting.
+Cliff RAE exceeds non-cliff RAE for 7 of 9 endpoints. The effect is most dramatic for HLM CLint, Caco-2 Efflux, and MPPB. The two exceptions — MLM CLint and MBPB — show cliff molecules with *better* performance, possibly because cliff pairs in these endpoints have large value ranges that XGBoost handles via tree splitting.
 
-R² drops on cliffs for 7 of 9 endpoints, going negative for Caco-2 Papp A>B. Spearman ρ is consistently lower on cliffs (all 9 endpoints), even for MLM CLint and MBPB — ranking cliff molecules is universally harder than ranking non-cliff molecules.
+R² drops on cliffs for 7 of 9 endpoints. Spearman ρ is consistently lower on cliffs for 7 of 9 endpoints — ranking cliff molecules is generally harder than ranking non-cliff molecules.
 
 ### Interpretation
 
