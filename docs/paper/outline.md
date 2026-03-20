@@ -330,11 +330,22 @@ This paper sits between a review and an opinion paper. Instead of prescriptive "
 
 ## Key References
 
-- Sheridan et al. (Merck) — performance over distance correlation
-- MoleculeACE — activity cliff evaluation
-- Greg Landrum's blog — scaffold split ≈ random split
-- Pat's blog — split variance
-- MOOD, SPECTRA — performance over distance curves
-- Runs 'N Poses — distance metrics for protein-ligand binding
-- Landrum & Riniker — aggregating data from multiple sources
-- Wognum et al. (JCIM 2025, DOI: 10.1021/acs.jcim.5c01609) — companion work on method comparison best practices [19]
+1. Vamathevan, J. et al. Applications of machine learning in drug discovery and development. *Nat. Rev. Drug Discov.* **18**, 463–477 (2019).
+2. Walters, W. P. & Barzilay, R. Critical assessment of AI in drug discovery. *Expert Opin. Drug Discov.* **16**, 937–947 (2021).
+3. Sheridan, R. P. Time-split cross-validation as a method for estimating the goodness of prospective prediction. *J. Chem. Inf. Model.* **53**, 783–790 (2013).
+4. Landrum, G. The problem(s) with scaffold splits / Using intake for chemistry. *RDKit Blog* (2023).
+5. Walters, W. P. Some Thoughts on Evaluating Predictive Models. *Practical Cheminformatics Blog* (2019).
+6. Tossou, P., Wognum, C., et al. Real-World Molecular Out-Of-Distribution: Specification and Investigation. *J. Chem. Inf. Model.* **64**, 697–711 (2024).
+7. Hauptmann, T. et al. SPECTRA: a tool for enhanced performance assessment. *J. Cheminform.* (2024).
+8. Tilborg, D. van et al. Exposing the limitations of molecular machine learning with activity cliffs. *J. Chem. Inf. Model.* **62**, 5938–5951 (2022).
+9. Sheridan, R. P. et al. Experimental error, kurtosis, activity cliffs, and methodology: What limits the predictivity of quantitative structure–activity relationship models? *J. Chem. Inf. Model.* **60**, 1969–1982 (2020).
+10. Tilborg, D. van et al. MoleculeACE: evaluating predictive performance on activity cliff compounds. *J. Cheminform.* **14**, 45 (2022).
+11. Seal, S. LinkedIn post on molecular variant consistency in ADMET predictions (2025).
+12. OpenADMET Expansion Rx Challenge (2025). Dataset: https://huggingface.co/datasets/openadmet/openadmet-expansionrx-challenge-data
+13. Landrum, G. RDKit: Open-source cheminformatics software. https://www.rdkit.org
+14. Ropp, P. J. et al. Dimorphite-DL: an open-source program for enumerating the ionization states of drug-like small molecules. *J. Cheminform.* **11**, 14 (2019).
+15. Butina, D. Unsupervised data base clustering based on daylight's fingerprint and Tanimoto similarity. *J. Chem. Inf. Comput. Sci.* **39**, 747–750 (1999).
+16. Ralaivola, L. et al. Graph kernels for chemical informatics. *Neural Netw.* **18**, 1093–1110 (2005).
+17. Chen, T. & Guestrin, C. XGBoost: A scalable tree boosting system. In *Proc. KDD* 785–794 (2016).
+18. Bemis, G. W. & Murcko, M. A. The properties of known drugs. 1. Molecular frameworks. *J. Med. Chem.* **39**, 2887–2893 (1996).
+19. Ash, J. R., Wognum, C., et al. Practically Significant Method Comparison Protocols for Machine Learning in Small Molecule Drug Discovery. *J. Chem. Inf. Model.* **65**, (18) (2025). DOI: 10.1021/acs.jcim.5c01609.
