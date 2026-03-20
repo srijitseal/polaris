@@ -13,6 +13,7 @@ Outputs:
     data/processed/2.12-seal-split-variance/summary_metrics.csv
     data/processed/2.12-seal-split-variance/repeat_aggregates.csv
     data/processed/2.12-seal-split-variance/variance_summary.csv
+    data/processed/2.12-seal-split-variance/mannwhitney_rae_tests.csv
     data/processed/2.12-seal-split-variance/rae_distributions.png
     data/processed/2.12-seal-split-variance/r2_distributions.png
     data/processed/2.12-seal-split-variance/ma_rae_distribution.png
@@ -32,7 +33,7 @@ from loguru import logger
 from rdkit import Chem, RDLogger
 from rdkit.Chem import AllChem, Descriptors
 from rdkit.ML.Descriptors.MoleculeDescriptors import MolecularDescriptorCalculator
-from scipy.stats import kendalltau, spearmanr
+from scipy.stats import kendalltau, mannwhitneyu, spearmanr
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBRegressor
@@ -515,6 +516,44 @@ def main(
     fig.savefig(output_dir / "single_split_danger.png", dpi=dpi, bbox_inches="tight")
     logger.info("Saved single_split_danger.png")
     plt.close("all")
+
+    # ── 10. Mann-Whitney U tests: cluster vs random RAE ─────────────
+    logger.info("Computing Mann-Whitney U tests on per-repeat RAE (cluster vs random)")
+
+    mw_rows = []
+    for ep in active_endpoints:
+        ep_cluster = repeat_agg[
+            (repeat_agg["endpoint"] == ep) & (repeat_agg["strategy"] == "cluster")
+        ]["rae_mean"].values
+        ep_random = repeat_agg[
+            (repeat_agg["endpoint"] == ep) & (repeat_agg["strategy"] == "random")
+        ]["rae_mean"].values
+
+        if len(ep_cluster) < 3 or len(ep_random) < 3:
+            logger.warning(f"Skipping {ep}: insufficient repeats")
+            continue
+
+        stat, pval = mannwhitneyu(ep_cluster, ep_random, alternative="two-sided")
+        mw_rows.append({
+            "endpoint": ep,
+            "n_cluster": len(ep_cluster),
+            "n_random": len(ep_random),
+            "cluster_median_rae": float(np.median(ep_cluster)),
+            "random_median_rae": float(np.median(ep_random)),
+            "cluster_mean_rae": float(np.mean(ep_cluster)),
+            "random_mean_rae": float(np.mean(ep_random)),
+            "u_statistic": stat,
+            "p_value": pval,
+        })
+        logger.info(
+            f"  {ep}: U = {stat:.1f}, p = {pval:.4f} "
+            f"(cluster RAE = {np.median(ep_cluster):.3f}, "
+            f"random RAE = {np.median(ep_random):.3f})"
+        )
+
+    mw_df = pd.DataFrame(mw_rows)
+    mw_df.to_csv(output_dir / "mannwhitney_rae_tests.csv", index=False)
+    logger.info("Saved mannwhitney_rae_tests.csv")
 
     logger.info(f"All outputs saved to {output_dir}")
 

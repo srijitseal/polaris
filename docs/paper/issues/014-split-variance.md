@@ -54,6 +54,22 @@ Cluster-split R² ranges are dramatic: MGMB spans 0.117–0.531 across 5 repeats
 
 Random MA-RAE is tightly clustered — 20 repeats look almost identical. Cluster MA-RAE shows meaningful spread, confirming that cluster-based evaluation is sensitive to which structural groups are held out. The gap between strategies (~0.23 MA-RAE) dwarfs the within-strategy variance.
 
+### Statistical tests (Mann-Whitney U)
+
+| Endpoint | U statistic | p-value | Cluster median RAE | Random median RAE |
+|---|---|---|---|---|
+| LogD | 100.0 | < 10^-4 | 0.568 | 0.360 |
+| KSOL | 100.0 | < 10^-4 | 0.741 | 0.512 |
+| HLM CLint | 100.0 | < 10^-4 | 0.877 | 0.606 |
+| MLM CLint | 100.0 | < 10^-4 | 0.790 | 0.552 |
+| Caco-2 Papp A>B | 100.0 | < 10^-4 | 0.710 | 0.475 |
+| Caco-2 Efflux | 100.0 | < 10^-4 | 0.694 | 0.425 |
+| MPPB | 100.0 | < 10^-4 | 0.720 | 0.491 |
+| MBPB | 100.0 | < 10^-4 | 0.666 | 0.423 |
+| MGMB | 100.0 | < 10^-4 | 0.675 | 0.481 |
+
+Mann-Whitney U tests confirm that cluster and random RAE distributions are entirely non-overlapping for all 9 endpoints (U = 100.0, p < 10^-4). The maximum U statistic (100 = 5 × 20, all cluster values exceed all random values) indicates complete separation — the choice of splitting strategy dominates any within-strategy variance.
+
 ### Interpretation
 
 The results reveal a subtlety beyond "single splits are noisy." Random CV is *not* noisy — 20 repeats produce nearly identical metrics. The problem is that random CV gives **precise estimates of the wrong thing**: performance on structurally similar test molecules that leaked across fold boundaries.

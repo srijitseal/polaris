@@ -7,8 +7,8 @@ Training XGBoost on the largest chemical series (Butina cluster 0, n=2,572) and 
 ## Method
 
 1. **Select two largest Butina clusters** (cutoff 0.7, from notebook 2.01): cluster 0 (n=2,572) and cluster 1 (n=1,301). These represent two distinct chemical series from the Expansion Tx drug discovery campaigns.
-2. **Time-split cluster 0** using ordinal molecule index (E-XXXXXXX naming encodes temporal order): earlier 80% = train (n=2,062), later 20% = IID validation (n=516). This mimics how a medicinal chemist would deploy a model: train on past compounds, predict new ones in the same series.
-3. **Cluster 2 = OOD test set** (n=1,306). This mimics predicting an entirely different chemical series — a harder but common real-world scenario (e.g., hit-to-lead on a new scaffold).
+2. **Time-split cluster 0** using ordinal molecule index (E-XXXXXXX naming encodes temporal order): earlier 80% = train (n=2,057), later 20% = IID validation (n=515). This mimics how a medicinal chemist would deploy a model: train on past compounds, predict new ones in the same series.
+3. **Cluster 1 = OOD test set** (n=1,301). This mimics predicting an entirely different chemical series — a harder but common real-world scenario (e.g., hit-to-lead on a new scaffold).
 4. **Train default XGBoost** (`XGBRegressor(random_state=42)`, no hyperparameter tuning) per endpoint on ECFP4 (2048-bit) + full RDKit 2D descriptors (~200), with dimorphite_dl protonation at assay-relevant pH. No tuning is intentional — this is a case study about distribution shift, not model optimization.
 5. **Compare squared error distributions** between IID and OOD predictions. Log-transform applied to all endpoints except LogD, matching the competition evaluation protocol.
 

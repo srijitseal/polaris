@@ -66,6 +66,16 @@ Scaffold–random RAE differences are 0.03–0.08 (small). Cluster–random diff
 
 Scaffold and random 1-NN distributions overlap substantially (medians 0.246 vs 0.203). The cluster-based split produces a right-shifted distribution with ~2× larger median distance (0.424), confirming genuine structural separation.
 
+### Statistical tests (KS)
+
+| Comparison | KS statistic D | p-value | n_1 | n_2 |
+|---|---|---|---|---|
+| scaffold vs random | 0.2028 | < 10^-10 | 36,003 | 36,003 |
+| cluster vs random | 0.6617 | < 10^-10 | 36,003 | 36,003 |
+| cluster vs scaffold | 0.5356 | < 10^-10 | 36,003 | 36,003 |
+
+Two-sample Kolmogorov-Smirnov tests on pooled 1-NN distance arrays confirm that while the scaffold vs random difference is statistically significant (D = 0.203), it is modest compared to the cluster vs random difference (D = 0.662). All three comparisons are highly significant (p ≈ 0), but the effect sizes tell the real story: scaffold splits create only a small shift from random, while cluster-based splits create a qualitatively different distribution.
+
 ### Interpretation
 
 The naive scaffold split fails to create distribution shift because:

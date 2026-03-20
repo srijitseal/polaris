@@ -12,6 +12,7 @@ Outputs:
     data/processed/2.11-seal-scaffold-vs-random/summary_metrics.csv
     data/processed/2.11-seal-scaffold-vs-random/aggregated_metrics.csv
     data/processed/2.11-seal-scaffold-vs-random/distance_stats.csv
+    data/processed/2.11-seal-scaffold-vs-random/ks_distance_tests.csv
     data/processed/2.11-seal-scaffold-vs-random/metric_comparison.png
     data/processed/2.11-seal-scaffold-vs-random/distance_distributions.png
     data/processed/2.11-seal-scaffold-vs-random/strategy_summary.png
@@ -30,7 +31,7 @@ from rdkit.Chem import AllChem, Descriptors
 from rdkit.Chem.Scaffolds import MurckoScaffold
 from rdkit.ML.Descriptors.MoleculeDescriptors import MolecularDescriptorCalculator
 from scipy.spatial.distance import squareform
-from scipy.stats import kendalltau, spearmanr
+from scipy.stats import kendalltau, ks_2samp, spearmanr
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBRegressor
@@ -483,6 +484,42 @@ def main(
     fig.savefig(output_dir / "strategy_summary.png", dpi=dpi, bbox_inches="tight")
     logger.info("Saved strategy_summary.png")
     plt.close("all")
+
+    # ── 9. KS tests on distance distributions ──────────────────────
+    logger.info("Computing KS tests on 1-NN distance distributions")
+
+    comparisons = [
+        ("scaffold", "random"),
+        ("cluster", "random"),
+        ("cluster", "scaffold"),
+    ]
+
+    ks_rows = []
+    for s1, s2 in comparisons:
+        d1 = dist_df[dist_df["strategy"] == s1]["nn1_distance"].values
+        d2 = dist_df[dist_df["strategy"] == s2]["nn1_distance"].values
+        stat, pval = ks_2samp(d1, d2)
+        ks_rows.append({
+            "comparison": f"{s1} vs {s2}",
+            "strategy_1": s1,
+            "strategy_2": s2,
+            "n_1": len(d1),
+            "n_2": len(d2),
+            "ks_statistic": stat,
+            "p_value": pval,
+            "median_1": np.median(d1),
+            "median_2": np.median(d2),
+            "mean_1": np.mean(d1),
+            "mean_2": np.mean(d2),
+        })
+        logger.info(
+            f"  {s1} vs {s2}: D = {stat:.4f}, p = {pval:.2e} "
+            f"(n1={len(d1)}, n2={len(d2)})"
+        )
+
+    ks_df = pd.DataFrame(ks_rows)
+    ks_df.to_csv(output_dir / "ks_distance_tests.csv", index=False)
+    logger.info("Saved ks_distance_tests.csv")
 
     logger.info(f"All outputs saved to {output_dir}")
 
