@@ -13,6 +13,8 @@ Outputs:
     data/processed/2.11-seal-scaffold-vs-random/aggregated_metrics.csv
     data/processed/2.11-seal-scaffold-vs-random/distance_stats.csv
     data/processed/2.11-seal-scaffold-vs-random/ks_distance_tests.csv
+    data/processed/2.11-seal-scaffold-vs-random/scaffold_group_stats.csv
+    data/processed/2.11-seal-scaffold-vs-random/scaffold_group_sizes.png
     data/processed/2.11-seal-scaffold-vs-random/metric_comparison.png
     data/processed/2.11-seal-scaffold-vs-random/distance_distributions.png
     data/processed/2.11-seal-scaffold-vs-random/strategy_summary.png
@@ -520,6 +522,56 @@ def main(
     ks_df = pd.DataFrame(ks_rows)
     ks_df.to_csv(output_dir / "ks_distance_tests.csv", index=False)
     logger.info("Saved ks_distance_tests.csv")
+
+    # ── 10. Scaffold group size statistics ─────────────────────────
+    logger.info("Computing scaffold group size statistics")
+
+    all_smiles = df["SMILES"].tolist()
+    all_scaffolds = [get_scaffold(s) for s in all_smiles]
+
+    scaffold_groups_all: dict[str, list[int]] = {}
+    for i, scaf in enumerate(all_scaffolds):
+        scaffold_groups_all.setdefault(scaf, []).append(i)
+
+    group_sizes = np.array([len(v) for v in scaffold_groups_all.values()])
+    n_unique = len(scaffold_groups_all)
+    n_singletons = int(np.sum(group_sizes == 1))
+
+    stats = {
+        "n_molecules": len(all_smiles),
+        "n_unique_scaffolds": n_unique,
+        "n_singletons": n_singletons,
+        "pct_singletons": 100 * n_singletons / n_unique,
+        "median_group_size": float(np.median(group_sizes)),
+        "mean_group_size": float(np.mean(group_sizes)),
+        "max_group_size": int(np.max(group_sizes)),
+    }
+    stats_df = pd.DataFrame([stats])
+    stats_df.to_csv(output_dir / "scaffold_group_stats.csv", index=False)
+    logger.info(
+        f"  {n_unique} unique scaffolds, {n_singletons} singletons "
+        f"({stats['pct_singletons']:.1f}%), median size {stats['median_group_size']}"
+    )
+
+    # Histogram of scaffold group sizes
+    fig, ax = plt.subplots(figsize=(8, 4))
+    max_display = 20
+    bins = np.arange(1, max_display + 2) - 0.5
+    clipped = np.clip(group_sizes, 1, max_display)
+    ax.hist(clipped, bins=bins, color="coral", edgecolor="white", alpha=0.8)
+    tick_labels = [str(i) for i in range(1, max_display)] + [f"{max_display}+"]
+    ax.set_xticks(range(1, max_display + 1))
+    ax.set_xticklabels(tick_labels, fontsize=8)
+    ax.set_xlabel("Scaffold group size")
+    ax.set_ylabel("Number of scaffolds")
+    ax.set_title(
+        f"Murcko scaffold group size distribution "
+        f"({n_singletons}/{n_unique} = {stats['pct_singletons']:.0f}% singletons)"
+    )
+    fig.tight_layout()
+    fig.savefig(output_dir / "scaffold_group_sizes.png", dpi=dpi, bbox_inches="tight")
+    logger.info("Saved scaffold_group_sizes.png")
+    plt.close("all")
 
     logger.info(f"All outputs saved to {output_dir}")
 

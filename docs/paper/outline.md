@@ -349,3 +349,4 @@ This paper sits between a review and an opinion paper. Instead of prescriptive "
 17. Chen, T. & Guestrin, C. XGBoost: A scalable tree boosting system. In *Proc. KDD* 785–794 (2016).
 18. Bemis, G. W. & Murcko, M. A. The properties of known drugs. 1. Molecular frameworks. *J. Med. Chem.* **39**, 2887–2893 (1996).
 19. Ash, J. R., Wognum, C., et al. Practically Significant Method Comparison Protocols for Machine Learning in Small Molecule Drug Discovery. *J. Chem. Inf. Model.* **65**, (18) (2025). DOI: 10.1021/acs.jcim.5c01609.
+20. Rogers, D. & Hahn, M. Extended-Connectivity Fingerprints. *J. Chem. Inf. Model.* **50**, 742–751 (2010).
