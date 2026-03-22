@@ -32,9 +32,9 @@ This paper sits between a review and an opinion paper. Instead of prescriptive "
 
 ## Results
 
-### 1. The Expansion Tx dataset provides realistic ADMET data from drug discovery
+### 1. ADMET data sparsity is endpoint-dependent
 
-**Claim**: This dataset is uniquely suited for studying generalization because it comes from real drug discovery campaigns and has properties (ordinal ordering, chemical series, multi-CRO) not found in typical public benchmarks.
+**Claim**: ADMET datasets are sparse with asymmetric coverage reflecting drug discovery realities; characterizing this is essential before any evaluation.
 
 **Content**:
 - 7,608 ML-ready molecules (5,326 train + 2,282 test, zero overlap) from Expansion Therapeutics' RNA-small molecule drug discovery programs
@@ -44,199 +44,191 @@ This paper sits between a review and an opinion paper. Instead of prescriptive "
 - Ordinal molecule naming (E-XXXXXXX) preserves temporal ordering — train median index 15,918 vs test median 22,478 — enables time-split without explicit timestamps
 - Several large chemical series (>500 compounds) — enables IID vs OOD evaluation
 - Raw dataset includes out-of-range modifiers (">", "<"); ML-ready version has in-range only
+- Endpoint coverage is highly asymmetric, reflecting drug discovery testing cascade:
+  - Well-covered: LogD (7,309, 96%), KSOL (7,298, 96%), MLM CLint (5,692, 75%)
+  - Moderate: HLM CLint (4,541, 60%), Caco-2 Papp/Efflux (~3,775, 50%)
+  - Sparse: MPPB (1,756, 23%), MBPB (1,426, 19%), MGMB (431, 6%)
+  - All 9 endpoints show significant train/test distribution shift (KS test p < 0.01), especially Caco-2 Efflux (KS=0.37) and Caco-2 Papp (KS=0.28) — consistent with permeability assays added later in campaign
 - Physicochemical properties confirm RNA-targeting hypothesis: median MW ~480 (many exceed Lipinski 500), high aromaticity (median ~4-5 rings), low FractionCSP3 (~0.2), high HBA counts — differs from typical protein modulators
-- Data quality: representative of real-world drug discovery, consistent original source, no obvious errors
+- Competition split: test-to-train 1-NN median distance 0.375, nearly double within-train median 0.203 — reflects natural evolution of medicinal chemistry exploring increasingly distant chemical space
 
 **Open questions**:
 - Can CRO annotations be obtained per compound? (important for understanding data consistency, cf. Landrum & Riniker)
 - Can repeat measurements be used to characterize aleatoric uncertainty per assay?
 - Can actual targets be shared? (selectivity context)
-- Correlation plots between assays (informative but may need to wait until after competition)
 
-### 2. Chemical space and target distribution characterize dataset diversity
+**Figures**: Figure 1 (train vs test distance distributions), Table 1 (endpoint coverage)
 
-**Claim**: Prior to splitting, both the chemical space and target distribution must be characterized — not all datasets can test all hypotheses.
+### 2. Chemical space reveals concentrated series structure
 
-**Content — Chemical Space**:
-- Visualize 1-NN ECFP4 Tanimoto distance distribution (dataset to itself) as a measure of chemical diversity
-- Also show all-pairwise and 5-NN distance distributions (cf. Cas's Biogen case study)
+**Claim**: In real drug discovery programs, the majority of medicinal chemistry effort is concentrated on a few promising chemical series, while smaller exploratory series and singleton hits populate the long tail. This series structure creates a natural challenge for generalization.
+
+**Content**:
 - Butina clustering (cutoff 0.7) to identify chemical series — show cluster size distribution
-  - 135 clusters total; top 5 sizes: 2572, 1301, 885, 762, 282; 33 singletons (24.4%); median size 4
+  - 135 clusters total; top 5 sizes: 2,572, 1,301, 885, 762, 282; 33 singletons (24.4%); median size 4
   - Three dominant clusters contain ~62.5% of molecules — dataset has concentrated chemical series
+- Models trained predominantly on one or two major series must extrapolate when encountering a distinct series with different pharmacophoric features and SAR patterns
 - Visualize representative molecules from the 5 largest clusters (6 random examples each)
-- If a deployment set is known (e.g., screening library), also visualize 1-NN distances from that set to the dataset to contextualize the chemical space further
-- The Biogen case study showed: dataset is diverse, with lots of datapoints having far neighbors
 
-**Content — Target Distribution**:
-- Distribution plots for each of the 9 endpoints, including total counts per endpoint (many compounds have sparse endpoint coverage)
-  - Well-covered: LogD (7,309, 96%), KSOL (7,298, 96%), MLM CLint (5,692, 75%)
-  - Moderate: HLM CLint (4,541, 60%), Caco-2 Papp/Efflux (~3,775, 50%)
-  - Sparse: MPPB (1,756, 23%), MBPB (1,426, 19%), MGMB (431, 6%)
-  - All endpoints show significant train/test distribution shift (KS test p < 0.01), especially Caco-2 Efflux (KS=0.37) and Caco-2 Papp (KS=0.28)
-- The range should cover the target distribution of the deployment setting
-- Understanding which endpoints have sufficient coverage for meaningful splitting
+**Figures**: Figure 2 (cluster size distribution)
 
-**Methodology note**: Use ECFP4 (2048-bit) + Tanimoto as the default distance metric. While no single distance captures the complete richness of molecular data, prioritize simplicity over perfection.
+### 3. Three splitting strategies probe complementary generalization axes
 
-### 3. Splitting strategies that mimic deployment reveal performance gaps
-
-**Claim**: Splitting strategies should be motivated by the distribution shift encountered in real-world scenarios, and must be compatible with cross-validation.
+**Claim**: Splitting strategies should be motivated by the distribution shift encountered in real-world deployment scenarios, and must be compatible with cross-validation. No single split captures all deployment realities.
 
 **Three deployment scenarios** (each strategy corresponds to a distinct drug discovery phase):
 
-#### 3a. Generalization across chemical space (Hit Identification)
-- Goal: generalize to structurally novel compounds (e.g., virtual screening)
-- **If deployment set is known**: make test set equally dissimilar to train set as the deployment set is
-- **Otherwise**: use cluster-based split
+#### 3a. Cluster-based splitting (Hit Identification / Virtual Screening)
+- Goal: generalize to structurally novel compounds not represented in training data
+- EKM + MiniBatchKMeans (k=20) → greedy assignment to 5 folds
+- 5 repeats × 5 folds = 25 train/test splits per endpoint
+- Produces largest structural distances (LogD median 1-NN: 0.369–0.440 across 5 folds) with near-zero structural overlap
 
-**Cluster-based split** (recommended):
-- k-means clustering on ECFP4 fingerprints
-- Use Empirical Kernel Map (EKM) to make k-means compatible with ECFP4 + Tanimoto distance
-- Mini Batch K-Means for scalability
-- Each cluster (or subset of clusters) = one fold for cross-validation
-- k-means produces more equally sized clusters than hierarchical methods — needed for good train-test ratios
-- EKM + Mini Batch K-Means introduces stochasticity — slightly different clustering per replicate, useful for 5x5 CV
-- Per-endpoint fold assignments: each endpoint gets its own folds using only molecules with non-null values
-- Over-cluster (k=20) then greedily assign clusters to folds for balance — all endpoints achieve max/min fold size ratio < 1.12
-- 5x5 CV: 5 repeats × 5 folds = 25 train/test splits per endpoint
-
-#### 3b. Generalization across target space (Lead Optimization)
-- Goal: expand a chemical series to optimize a target property of interest
-- **Regression**: Expanding window CV sorted by endpoint value (4 folds)
-  - Train on lower values, test on progressively higher values — tests extrapolation
-  - Target-split produces low structural distances (LogD median 1-NN: 0.245–0.286) — molecules with similar target values are often structurally similar
-  - CLint endpoints show extreme value ranges in later folds (e.g., HLM CLint fold 3: 58.5–2589.9)
-  - Deterministic, single repeat (no stochasticity in value-based sorting)
-
-#### 3c. Time-split using ordinal ordering
-- Exploit the ordinal molecule naming (E-XXXXXXX) as a proxy for temporal ordering
-- Split earlier molecules as train, later as test — mimics real-world scenario where models are trained on historical data and deployed on new compounds
+#### 3b. Time-based splitting (Prospective Deployment)
+- Exploit ordinal molecule naming (E-XXXXXXX) as temporal proxy
 - Expanding window CV: 4 folds, each trains on all earlier data, tests on next temporal chunk
-- Time-split pooled median 1-NN distance (0.350) is lower than cluster-split (0.410) — temporal neighbors are often structurally similar (same chemical series explored over time)
-- Per-fold medians (0.386, 0.351, 0.302, 0.364) do not monotonically increase — chemical series exploration is non-linear in time
-- Unique to this dataset — public datasets rarely have temporal information
+- Intermediate distances (0.301–0.386) with non-monotonic per-fold patterns — chemical series exploration is non-linear in time
+- Endpoint value distributions shift across folds (KS test p < 0.05), confirming temporal drift in both chemical and property space
 
-### 4. Split quality diagnostics validate splitting approaches
+#### 3c. Target-value splitting (Lead Optimization)
+- Molecules sorted by endpoint value, expanding window CV (4 folds)
+- Lowest structural distances (0.245–0.286) but maximal target distribution shift (KS 0.956–0.988)
+- Tests whether models can extrapolate to value ranges not seen during training
 
-**Claim**: Sanity checks are essential to detect split artifacts that can invalidate conclusions.
+All strategies produced balanced fold sizes (max/min ratio < 1.12). Distance distributions illustrated for LogD as representative endpoint.
 
-**Required checks**:
-1. **Split size**: No excessively large or small test sets — verify expected train-test ratio across all folds
-2. **Target distribution**: Ensure expected class imbalance / value range in each fold; no fold should have a drastically different target distribution
-3. **Test-to-train distance distribution**: Visualize for each fold; should be similar to the deployment set distance distribution (if known) or the screening library distance distribution
-4. **Train-test overlap**: Check for structural overlap (e.g., identical scaffolds, near-duplicates)
+**Figures**: Figure 3 (test-to-train 1-NN distance distributions by strategy)
 
-**Optional**:
-- UMAP embedding visualization of train/test per fold
-
-### 5. Performance degrades with distance from training data
+### 4. Performance degrades systematically with structural distance
 
 **Claim**: Aggregate performance metrics hide systematic degradation at the frontier of the training distribution. A performance-over-distance curve reveals where models actually fail.
 
-**Motivation**: Sheridan et al. (Merck) showed correlation between distance to train set and performance. If we could characterize generalization with such a curve, we could estimate performance for any specific deployment set and compare models meaningfully. If we just look at average performance and care about a virtual screening application, we overestimate performance on the deployment set.
-
-**Sampling the curve** (recommended protocol from guidelines):
-1. **Split**: Use all three pre-saved CV splits (cluster repeat 0: 5 folds; time repeat 0: 4 folds; target repeat 0: 4 folds)
-2. **Distance**: For each test datapoint, compute distance to nearest training neighbor (ECFP4 + Tanimoto)
-3. **Bins**: Combine all distances across splits, define bins using sliding window:
-   - min = Q1 - 1.5*IQR, max = Q3 + 1.5*IQR (filter major outliers)
-   - binwidth = (max - min) / 5
-   - stepsize = binwidth / 20
-   - bin_i = (min + stepsize * i, min + stepsize * i + binwidth)
-4. **Per-split curve**: Compute performance metric (RMSE) in each bin per fold. Skip bins with < 25 samples
-5. **Visualize**: Combine per-fold curves into single figure with median + 10th–90th percentile bands
-
-**Two distance metrics**:
-1. Performance over ECFP4 Tanimoto distance (structural space)
-2. Performance over target-space distance (|y_test - nearest y_train|)
-
-**Model**: XGBoost (fixed architecture: n_estimators=1000, max_depth=6, lr=0.1, subsample=0.8, colsample_bytree=0.4) on ECFP4 + full RDKit 2D descriptors (~200), with dimorphite_dl protonation at assay pH (7.4 for most, 6.5 for Caco-2). Targets log-transformed via `log10(clip(x, 1e-10) + 1)` for all endpoints except LogD, matching competition evaluation protocol. Fixed architecture (no per-endpoint tuning) avoids data leakage across CV folds.
+**Model**: Fixed-architecture XGBoost (n_estimators=1000, max_depth=6, lr=0.1, subsample=0.8, colsample_bytree=0.4) — same config across all 9 endpoints and 3 split strategies to ensure performance differences reflect the splitting strategy, not tuning.
 
 **Key findings** (all 9 endpoints, competition metrics):
-- **Cluster-split** (MA-RAE 0.732) gives the best overall performance — each fold sees structurally diverse training data. R² ranges from 0.19 (MGMB) to 0.68 (LogD)
-- **Time-split** (MA-RAE 0.837) is worse because early folds have small training sets (expanding window starts at 50:50). R² drops below 0 for MGMB where training data is smallest (86 molecules at fold 0)
-- **Target-split** (MA-RAE 6.927) produces catastrophically negative R² across all endpoints — by design, folds are ordered by target value, so test molecules systematically fall outside the training distribution. Spearman ρ collapses to near-zero (~0.01–0.07)
-- **Structural degradation on log-scale**: cluster-split shows 2–4x RMSE degradation for most endpoints (LogD 4.0x, HLM CLint 3.2x, MLM CLint 2.0x, KSOL 1.9x), while Caco-2 endpoints show minimal degradation (~1.1x)
-- **Comparison to competition baseline**: cluster-split CV (MA-RAE 0.732) is more optimistic than the held-out test set (MA-RAE 0.821), as expected — the competition split likely contains more structurally novel molecules
-- **Target-space distance curves** confirm complementary view: target-split shows increasing RMSE with target distance (by design), while cluster-split shows flatter target-space curves
+- **Cluster-split** (MA-RAE 0.732) best overall — each fold sees structurally diverse training data
+- **Time-split** (MA-RAE 0.839) worse because early folds have small training sets (expanding window)
+- **Target-split** (MA-RAE 6.909) catastrophic — tree-based models fundamentally cannot extrapolate beyond training value range
+- **Structural degradation**: cluster-split shows 2–4× RMSE degradation for most endpoints:
+  - LogD 3.98× (bulk thermodynamic property, but ECFP4 representation changes dramatically between distant scaffolds)
+  - HLM CLint 3.19× (metabolic soft spot accessibility diluted by rest of molecule in fingerprint)
+  - MLM CLint 1.95×, KSOL 1.87×
+  - Caco-2 endpoints show minimal degradation (Papp A>B 1.13×, Efflux 1.05×) — passive permeability governed by global properties (size, lipophilicity, H-bonding) captured by RDKit 2D descriptors
 
-**Distance metric note**: With the right choice, performance decreases with distance. For protein-ligand binding, the field has agreed on specific metrics (cf. Runs 'N Poses benchmark). For small molecules, no single universal metric exists — the right notion is endpoint-specific. Default: 2048-bit ECFP4 + Tanimoto.
+**Figures**: Figure 4 (performance-over-distance curves, 9 endpoints × 3 strategies), Table 2 (per-endpoint RAE by strategy)
 
-### 5b. Baseline performance on the original competition split
+### 5. IID versus OOD: degradation across chemical series boundaries
 
-**Claim**: Even simple baselines on the original train/test split reveal which endpoints are predictable and which are not — providing context for interpreting competition leaderboard scores and CV-based analyses.
+**Claim**: A model validated on historical compounds from a single program may appear excellent yet fail silently when applied to a new chemical series entering the pipeline. Uses two things normally unavailable in public datasets — time split and chemical series.
 
-**Setup**: XGBoost with per-endpoint hyperparameter tuning (HalvingRandomSearchCV, 50 candidates, factor=3, 3-fold CV) on ECFP4 + full RDKit 2D descriptors (~200), with dimorphite_dl protonation at assay pH. Trained on 5,326 train molecules, evaluated on 2,282 test molecules. Targets log-transformed for all endpoints except LogD. Metrics: MAE, R², Spearman ρ, Kendall's τ, RAE, MA-RAE (matching competition evaluation protocol).
+**Setup** (default XGBoost):
+- Train on largest Butina cluster (n=2,572), temporally split: first 80% (n=2,057) training, last 20% (n=515) IID validation
+- OOD test: second-largest cluster (n=1,301) — a structurally distinct chemical series, no molecules in common
+- IID 1-NN median distance: 0.288; OOD 1-NN median: 0.763 — nearly 3× further
+- Endpoint coverage verified: LogD/KSOL 98–100% in both clusters; clearance/permeability 25–73%; MGMB too sparse (7–17%) → excluded
 
-**Key findings** (MA-RAE 0.820):
-- LogD is most predictable (R² 0.53, RAE 0.66) — log-scale values and high data coverage (5,039 train)
-- Protein binding endpoints (MBPB R² 0.40, MGMB R² 0.35) perform surprisingly well despite small training sets (975, 222)
-- CLint endpoints are hardest (HLM R² 0.17, MLM R² 0.21) — heavy-tailed distributions even after log-transform
-- Log-transform is essential: training on raw-scale targets and only log-transforming at evaluation produces poor R² because the model optimizes for raw-scale MSE dominated by high-value outliers
-- Full RDKit 2D descriptors + dimorphite_dl protonation gave mixed per-endpoint effects but improved overall MA-RAE (0.826 → 0.820)
+**Key findings**: Dramatic OOD degradation across all endpoints:
+- R² goes negative OOD for all 8 endpoints (model worse than predicting the mean)
+- Median squared error increases 1.4–12.0× (MPPB 12.0×, KSOL 9.6×, LogD 5.1×)
+- HLM CLint and MLM CLint already show negative R² on IID — clearance hard even within-series
+- Caco-2 Papp most robust (1.4× degradation) — consistent with performance-over-distance finding
+- LogD, despite best IID performance (R²=0.50), degrades 5.1× to R²=-0.11 on OOD — within-series performance is fundamentally unreliable predictor of cross-series generalization
 
-### 6. Case studies illustrate generalization failure modes
+**Mechanistic interpretation**:
+- MPPB (12.0×): protein binding sensitive to specific hydrophobic surface topology, scaffold-dependent
+- KSOL (9.6×): solubility depends on crystal packing forces, highly scaffold-dependent
+- LogD (5.1×): ECFP4 representation changes between distant scaffolds even when global polarity conserved
 
-**Claim**: Beyond splitting, targeted case studies expose specific failure modes that aggregate metrics miss. These provide a framework for critically thinking about model strengths and weaknesses.
+**Figures**: Figure 5 (IID vs OOD squared error distributions), Table 3 (IID vs OOD metrics: R², Spearman, SE fold-change)
 
-#### 6a. IID vs OOD on chemical series (the "hero" example)
-- Train default XGBoost on the largest Butina cluster (n=2,572), time-split into train + IID validation
-- OOD test: second-largest cluster (n=1,301) — a structurally distinct chemical series
-- IID 1-NN median distance: 0.282; OOD 1-NN median: 0.761 — nearly 3× further
-- **Key finding**: Dramatic OOD degradation across all endpoints:
-  - R² goes negative OOD for all 8 endpoints (model worse than predicting the mean)
-  - Median squared error increases 1.4–12.0× (MPPB 12.0×, KSOL 9.6×, LogD 5.1×)
-  - RAE exceeds 1.0 (worse than mean) on OOD for 7 of 8 endpoints
-  - Spearman ρ collapses from 0.38–0.76 (IID) to near-zero or negative (OOD)
-  - Caco-2 Papp most robust (1.4× degradation)
-- **Why it matters**: Uses two things normally unavailable in public datasets — time split and chemical series. A trivial experiment with a devastating result — motivates the full framework
+### 6. Scaffold splits offer no improvement; cluster-based splitting is required
 
-#### 6b. Scaffold vs random split comparison
-- Ref: Greg Landrum's blog — without careful considerations, a scaffold split is similar to a random split
-- **Key finding**: Naive Bemis-Murcko scaffold split produces nearly identical performance to random split:
-  - Random MA-RAE: 0.480, Scaffold MA-RAE: 0.534, Cluster MA-RAE: 0.724
-  - Scaffold-random RAE gap: only 0.03–0.08 per endpoint (negligible)
-  - Scaffold-cluster RAE gap: 0.15–0.28 per endpoint (substantial)
-  - 1-NN median distances: scaffold 0.246 vs random 0.203 vs cluster 0.424
-  - **KS tests**: scaffold vs random D = 0.203 (modest), cluster vs random D = 0.662 (large), cluster vs scaffold D = 0.536, all p < 10^-10
-- Scaffold splits fail because frequent scaffolds appear in both train and test — the split creates scaffold-level separation but not structural novelty. Cluster-based splitting enforces genuine chemical space separation
+**Claim**: Naive Bemis-Murcko scaffold splits provide no meaningful advantage over random splits. Distance-aware methods are necessary to ensure genuine structural separation.
 
-#### 6c. Split variance study
-- Ref: Pat's blog — show the variance in performance when evaluating on different splits
-- 20 random-split repeats + 5 cluster-split repeats across all 9 endpoints (~1,125 models)
-- **Key finding**: Random splits give false confidence — tight variance (RAE std 0.002–0.012) but at an optimistic level (mean RAE ~0.48). Cluster splits reveal the true uncertainty (RAE std 0.020–0.060, range up to 0.185) at a harder level (mean RAE ~0.71)
-- The splitting strategy matters more than the number of repeats: random CV produces precise-but-biased estimates, while cluster CV reveals deployment-relevant uncertainty
-- **Mann-Whitney U tests**: U = 100.0, p < 10^-4 for all 9 endpoints — cluster and random RAE distributions are entirely non-overlapping
-- Worst case: MGMB cluster R² spans 0.117–0.531 across 5 repeats — a single split could report "poor" or "moderate" depending on the seed
-- Motivate the need for distance-aware splitting with repeated CV and confidence intervals
+**Setup** (default XGBoost, 5-fold CV, all 9 endpoints):
+- Naive scaffold splits: greedy assignment of Murcko scaffold groups to 5 folds
+- Random splits: seed=42
+- Cluster-based splits: EKM + KMeans (as in section 3)
 
-#### 6d. Activity cliff evaluation
-- Ref: MoleculeACE
-- Activity cliffs: pairs with Tanimoto similarity > 0.85 and activity difference in top quartile among similar pairs
-- **Key finding**: Cliff molecules (6–10% of molecules per endpoint) show consistently worse performance:
-  - Cliff RAE exceeds non-cliff RAE for 7 of 9 endpoints
-  - Worst case: HLM CLint cliff RAE = 0.901 vs non-cliff RAE = 0.857; Caco-2 Efflux cliff RAE = 0.882 vs non-cliff 0.641
+**Key findings**:
+- Random MA-RAE: 0.480, Scaffold MA-RAE: 0.534, Cluster MA-RAE: 0.724
+- Scaffold-random RAE gap: only 0.03–0.08 per endpoint (negligible)
+- Scaffold-cluster RAE gap: 0.15–0.28 per endpoint (substantial)
+- 1-NN median distances: scaffold 0.246 vs random 0.203 vs cluster 0.424
+- **KS tests**: scaffold vs random D = 0.203 (modest), cluster vs random D = 0.662 (large), cluster vs scaffold D = 0.536, all p < 10^-10
+- **Structural explanation**: 3,337 unique Murcko scaffolds; 2,252 (67.5%) contain only a single molecule, median size 1. Greedy assignment of singletons to folds ≈ random assignment. Structurally similar molecules with different Murcko frameworks (ring size change, heteroatom substitution) get assigned to different groups but remain proximate in fingerprint space
+
+**Figures**: Figure S2 (performance comparison), Table S2 (per-endpoint RAE by strategy) — supplementary
+
+### 7. Random cross-validation gives precise estimates of the wrong thing
+
+**Claim**: Random CV is highly reproducible but produces precise estimates of a quantity that does not correspond to deployment performance. The choice of splitting strategy is far more consequential than number of repeats.
+
+**Setup** (default XGBoost):
+- 20 independent random 5-fold CV repeats (seeds 0–19)
+- 5 cluster-based split repeats (stochastic EKM + MiniBatchKMeans)
+- ~1,125 models total
+
+**Key findings**:
+- Random splits: RAE std 0.002–0.012, ranges 0.009–0.055 — remarkably tight
+- Cluster splits: 3–17× wider ranges (0.057–0.185), RAE std 0.020–0.060
+- MGMB most extreme: cluster R² spans 0.117–0.531 across 5 repeats — "poor" or "moderate" depending on seed
+- **Mann-Whitney U tests**: U = 100.0, p < 10^-4 for all 9 endpoints — cluster and random RAE distributions entirely non-overlapping
+- MA-RAE gap between strategies (~0.23) dwarfs within-strategy variance by an order of magnitude
+- Random splits leak structurally similar molecules across fold boundaries (median test-to-train 1-NN of 0.203)
+
+**Practical recommendation**: Use distance-aware splits with multiple repeats and report confidence intervals. Five cluster repeats with wide CIs give an honest picture; 20 random repeats with narrow CIs give false confidence.
+
+**Figures**: Figure S3 (RAE distributions), Table S3 (R² variance) — supplementary
+
+### 8. Activity cliffs expose interpolation failures
+
+**Claim**: Activity cliffs — structurally similar molecules with unexpectedly large activity differences — violate the smoothness assumption underlying fingerprint-based models. This is a qualitatively distinct failure mode from extrapolation failure.
+
+**Definition**: Cliff pairs = Tanimoto similarity > 0.85 (ECFP4) + activity difference in top quartile among all such similar pairs for a given endpoint. Activity differences computed in log₁₀(x+1) space (matching target transform). Any molecule in ≥1 cliff pair labeled a cliff molecule.
+
+**Key findings** (default XGBoost, cluster-split CV, 5 folds):
+- Cliff molecules comprise 6–10% of molecules per endpoint
+- Cliff RAE exceeds non-cliff RAE for 7 of 9 endpoints:
+  - Worst: HLM CLint cliff RAE = 0.901 vs non-cliff 0.857; Caco-2 Efflux cliff RAE = 0.882 vs non-cliff 0.641
   - R² drops to 0.090 for MPPB cliffs (vs 0.495 non-cliff)
   - Spearman ρ consistently lower on cliffs across all 9 endpoints
-  - Two exceptions (MLM CLint, MBPB): cliff molecules show better performance, possibly because large value ranges in cliff pairs align with XGBoost's tree-splitting strengths
-- The effect is moderate but consistent — aggregate metrics obscure a known failure mode that matters for lead optimization
+- **Two exceptions**: MLM CLint (cliff RAE 0.703 vs non-cliff 0.752) and MBPB (cliff 0.524 vs non-cliff 0.639)
+  - MLM CLint: cliff pairs may have large value ranges that align with XGBoost's tree-splitting decisions
+  - MBPB: small number of cliff pairs (47 pairs, 86 molecules) limits statistical power
+- Endpoints may be particularly cliff-prone when governed by specific structural motifs (CYP450 recognition, P-gp substrate features)
 
-#### 6e. Molecular variant consistency
-- Ref: Srijit's LinkedIn post
-- Two variant types: stereoisomers (548 groups, 1,152 molecules, 15.1%) and scaffold decorations (1,050 groups, 3,835 molecules, 50.4%)
-- **Key finding — partial stereoisomer resolution**: Chirality-aware ECFP4 (useChirality=True) produces non-zero but small distances for stereoisomers (median 0.067, up from 0.000). Prediction CV = 0.006–0.018 across all 9 endpoints — 10–20× lower than scaffold decorations (0.099–0.251). Only 3 of ~200 RDKit 2D descriptors differ between stereoisomers (`NumAtomStereoCenters`, `NumUnspecifiedAtomStereoCenters`, `Ipc`), contributing negligibly beyond the fingerprint signal. Consistency ratios < 1 for most endpoints — the model *under-predicts* true biological variation between enantiomers.
-- **Key finding — scaffold decoration amplification**: Scaffold decoration groups show median fingerprint distance 0.349 and prediction CV 2–3× lower than random pairs (good — model learns scaffold-level trends). However, consistency ratios > 1 across most endpoints (up to 4.2× for KSOL) indicate the model amplifies substituent effects beyond true biological variation.
-- **Interpretation**: Two distinct failure modes — representation under-sensitivity (stereoisomers: model sees but under-reacts to the variation) and representation amplification (scaffold decorations: model over-reacts to fingerprint changes). Chirality-aware fingerprints partially resolve stereoisomer blindness but do not fully capture stereoselective ADMET differences.
+**Figures**: Figure S4 (squared error distributions), Table S4 (cliff prevalence and performance) — supplementary
 
-## Discussion
+### 9. Molecular representation limits prediction consistency
 
-### Summary
-- Random splits systematically overestimate performance by 51% (MA-RAE 0.480 vs 0.724 with cluster-based splitting); scaffold splits offer no meaningful improvement (MA-RAE 0.534)
-- The case studies reveal four complementary failure modes that aggregate metrics obscure:
-  - **Extrapolation failure** (IID vs OOD): 1.4–12.0× worse performance across chemical series boundaries, R² negative for all 8 endpoints
-  - **Interpolation failure** (activity cliffs): 6–10% of molecules show systematically higher error, cliff RAE up to 0.901 for HLM CLint
-  - **Representation failure** (molecular variants): chirality-aware ECFP4 partially resolves stereoisomer blindness but still under-predicts true biological variation (15% of dataset); scaffold decorations amplified beyond true biological variation
-  - **Evaluation failure** (scaffold ≈ random; split variance): random CV gives precise estimates of the wrong thing; single cluster-split R² spans 0.12–0.53 for MGMB
+**Claim**: The fingerprint's implicit similarity function may not align with the biological similarity function for the endpoint of interest. Two distinct failure modes: under-sensitivity to stereochemistry and amplification of scaffold decorations.
+
+**Stereoisomer analysis** (default XGBoost, cluster-split CV, 5 folds):
+- 548 stereoisomer groups (1,152 molecules, 15.1% of dataset) — pairs/sets of enantiomers and diastereomers
+- Chirality-aware ECFP4 (useChirality=True) produces non-zero but small distances (median 0.067, up from 0.000)
+- Prediction CV = 0.006–0.018 across all 9 endpoints — 10–20× lower than scaffold decorations (0.099–0.251) and random pairs (0.151–0.385)
+- Only 3 of ~200 RDKit 2D descriptors differ between stereoisomers (`NumAtomStereoCenters`, `NumUnspecifiedAtomStereoCenters`, `Ipc`), contributing negligibly
+- Consistency ratios < 1 for most endpoints — model *under-predicts* true biological variation between enantiomers
+- Biological significance: (R)/(S)-enantiomers can differ by orders of magnitude in clearance (stereoselective CYP450), binding (chiral pockets), efflux (stereoselective P-gp)
+
+**Scaffold decoration analysis**:
+- 1,050 scaffold decoration groups (3,835 molecules, 50.4%) — analogs sharing same Bemis-Murcko core, size 2–20
+- Median intra-group Tanimoto distance 0.349; prediction CV 2–3× lower than random pairs (model learns scaffold-level trends)
+- Consistency ratios > 1 across most endpoints (up to 4.2× for KSOL, 2.6× for Caco-2 Papp A>B) — model *amplifies* substituent effects beyond true biological variation
+- Amplification mechanism: single atom change in decoration modifies all circular substructures including that atom, flipping dozens of ECFP4 bits
+
+**Practical caveat**: Many public/pharma datasets contain unreliable stereochemistry annotations (racemic synthesis, incomplete chiral separation). Chirality-aware modeling can be counterproductive by fitting noise.
+
+**Figures**: Figure 6 (fingerprint distances), Table 4 (prediction consistency), Figures S5–S6 (prediction CV, spread scatter) — supplementary
+
+## Discussions
+
+### Summary of four failure modes
+- **Extrapolation failure** (IID vs OOD): 1.4–12.0× worse performance across chemical series boundaries, R² negative for all 8 endpoints on OOD — models trained on one series fail silently on a new series
+- **Interpolation failure** (activity cliffs): 6–10% of molecules show systematically higher error for 7 of 9 endpoints, cliff RAE up to 0.901 for HLM CLint — smoothness assumption violated
+- **Representation failure** (molecular variants): chirality-aware ECFP4 partially resolves stereoisomer blindness but still under-predicts true biological variation (15% of dataset); scaffold decorations amplified beyond true biological variation (up to 4.2× for KSOL)
+- **Evaluation failure** (scaffold ≈ random; split variance): random CV gives precise estimates of the wrong thing; scaffold splits are indistinguishable from random (MA-RAE 0.534 vs 0.480); single cluster-split R² spans 0.12–0.53 for MGMB
 - The framework connects evaluation choices to deployment scenarios (hit identification vs. lead optimization)
 - The Expansion Tx dataset uniquely enables these analyses due to its real-world provenance (ordinal ordering, chemical series, multi-endpoint coverage)
 
@@ -244,33 +236,29 @@ This paper sits between a review and an opinion paper. Instead of prescriptive "
 - The four failure modes are not dataset-specific but structural features of molecular ML: any dataset with concentrated chemical series → extrapolation failure; any fingerprint-based model → activity cliff failure; any fixed-radius fingerprint → representation blind spots; any evaluation not matching deployment distribution → misleading metrics
 - Encourage researchers to apply the framework to their own datasets rather than treating Expansion Tx results as universal benchmarks
 
-### Practical recommendations
+### Practical recommendations (six)
 1. Start from the deployment scenario — choose splitting strategy that creates the relevant distribution shift by construction
-2. Characterize dataset before splitting — chemical series structure, endpoint coverage, distance distributions
-3. Use distance-aware splits with multiple repeats and report confidence intervals
-4. Probe specific failure modes — performance-over-distance, activity cliffs, molecular variants
-5. Audit molecular representation for blind spots using variant group analysis
+2. Characterize dataset before splitting — chemical series structure, endpoint coverage, distance distributions determine which analyses are feasible
+3. Use distance-aware splits with multiple repeats and report confidence intervals; avoid random splits and single-number metrics
+4. Probe specific failure modes — performance-over-distance curves, activity cliff analysis, molecular variant consistency each reveal blind spots that aggregate metrics hide
+5. Audit molecular representation for blind spots using variant group analysis; the fingerprint's implicit similarity function may not align with the biological similarity function for your endpoint
+6. Accompany every prediction with a distance-based confidence estimate — performance-over-distance curves map nearest-neighbor distance to expected error range; non-technical end users (medicinal chemists, biologists, project leaders) need this context
 
-### Cultural shift
-- Journal/conference reviewers should require distribution-relevant splits, not just random splits
+### Conclusion (within Discussion)
+- Cultural shift needed: journal/conference reviewers should require distribution-relevant splits, not just random splits
 - Authors should characterize the distribution shift their model will face in deployment
 - Companion work on method comparison best practices [19] argued for structured reporting; here we extend to model evaluation
-- The community has the tools — what is needed now is the expectation that rigorous evaluation is the standard
+- The community has the tools — what is needed now is the expectation that rigorous evaluation is the standard, not the exception
+- Framework + Expansion Tx dataset openly available to encourage rigorous evaluation
 
 ### Limitations
-- Single therapeutic area (RNA-small molecule) — compounds may have different properties from protein modulators; generalizability of findings to other target classes is unknown
-- Dataset size (7,618) is modest relative to large-scale benchmarks — some analyses may be power-limited
-- Endpoint sparsity — not all molecules have all 10 endpoints measured
-- Distance metric choice (ECFP4 + Tanimoto) is pragmatic but endpoint-specific metrics could perform better
-- Data curation assumed — we provide high-level criteria but detailed curation guidance is out of scope (planned for future work)
+- Single therapeutic area (RNA-small molecule) — compounds may have different properties from protein modulators; generalizability to other target classes unknown
+- Dataset size (7,608) is modest relative to large-scale benchmarks — some analyses may be power-limited
+- Endpoint sparsity — not all molecules have all 9 endpoints measured (MGMB only 6%)
+- Distance metric choice (ECFP4 + Tanimoto/Jaccard) is pragmatic but endpoint-specific metrics could perform better
+- Data curation assumed — detailed curation guidance out of scope (planned for future work)
 - CRO consistency not fully characterized (pending annotation availability)
-- Chirality-aware ECFP4 (`useChirality=True`) partially resolves stereoisomer blindness but still under-predicts true biological variation; 3D descriptors could further improve stereochemical sensitivity
-
-### Community Opportunities
-- Framework is extensible to any ADMET dataset — code and methodology will be open-sourced
-- Standardized evaluation protocol for ADMET benchmarks
-- The OpenADMET competition sets the stage — community excitement around the dataset
-- Call for more real-world data release: "The more real-world data we collectively put out there, the faster we make drug discovery simpler" (Jon Ainsley, Expansion Tx)
+- Chirality-aware ECFP4 partially resolves stereoisomer blindness but 3D descriptors could further improve stereochemical sensitivity
 
 ## Methods
 
@@ -306,27 +294,28 @@ This paper sits between a review and an opinion paper. Instead of prescriptive "
 - Performance-over-distance curves with sliding window bins (RMSE per bin)
 - Cross-validation with confidence intervals (5x5 CV where applicable)
 
-### Models
-- **CV analyses (2.07)**: XGBoost with fixed architecture (n_estimators=1000, max_depth=6, lr=0.1, subsample=0.8, colsample_bytree=0.4, min_child_weight=5, gamma=1.0, reg_alpha=0.1, reg_lambda=1.5) — same config across all 9 endpoints and 3 split strategies to avoid data leakage
-- **Baseline (2.08)**: XGBoost with per-endpoint hyperparameter tuning via HalvingRandomSearchCV (50 candidates, factor=3, 3-fold CV, scoring=neg_MAE) on the competition train/test split
+### Models (three configurations)
+- **Fixed-architecture XGBoost** (NB 2.07 — performance-over-distance): n_estimators=1000, max_depth=6, lr=0.1, subsample=0.8, colsample_bytree=0.4, min_child_weight=5, gamma=1.0, reg_alpha=0.1, reg_lambda=1.5. Same config across all 9 endpoints and 3 split strategies — ensures performance differences reflect the splitting strategy, not tuning artifacts.
+- **Per-endpoint tuned XGBoost** (NB 2.08 — baseline only): HalvingRandomSearchCV (50 candidates, factor=3, 3-fold CV, scoring=neg_MAE) on the competition train/test split (5,326/2,282). Establishes best achievable single-model performance on the original held-out test set.
+- **Default XGBoost** (NB 2.09–2.13 — all case studies): Default hyperparameters. Used for IID vs OOD, scaffold vs random, split variance, activity cliffs, molecular variant consistency. Identical default models across these analyses ensure observed differences arise from data partitioning or molecular subpopulation, not model configuration.
 - Focus is on evaluation framework, not model architecture
 
-## Figures
+## Figures (current manuscript mapping)
 
-| Figure | Title | Source | Content |
-|--------|-------|--------|---------|
-| Fig 1 | Dataset overview | NB 1.01 | Endpoint distributions, counts per endpoint, dataset provenance |
-| Fig 2 | Chemical space characterization | NB 2.01 | 1-NN distance distribution, all-pairwise distances, Butina cluster sizes, representative molecules from top clusters |
-| Fig 3 | Target distribution analysis | NB 2.02 | Per-endpoint distributions, coverage heatmap |
-| Fig 4 | Splitting strategy comparison | NB 2.03-2.05 | Side-by-side: cluster vs time vs target-distribution splits |
-| Fig 5 | Split quality diagnostics | NB 2.06 | Split sizes, target distributions per fold, test-to-train distance distributions, optional UMAP |
-| Fig 6 | Performance-over-distance curves | NB 2.07 | RMSE vs structural distance and target-space distance for all 9 endpoints; XGBoost (fixed arch) across cluster/time/target splits; sliding-window bins with fold-level CI bands; overall R²/MAE/Spearman/RAE bar charts |
-| Fig 6b | Baseline performance on original split | NB 2.08 | R², MAE, Spearman ρ per endpoint; y_true vs y_pred scatter; XGBoost (tuned) on competition train/test |
-| Fig 7 | IID vs OOD on chemical series | NB 2.09 | The "hero" example: intra-series vs inter-series performance with time-split |
-| Fig S1 | Scaffold vs random split | NB 2.11 | Demonstrating naive scaffold split ≈ random split |
-| Fig S2 | Split variance analysis | NB 2.12 | Random splits give false confidence (tight CI, optimistic); cluster splits reveal true uncertainty (wide CI, honest). 20 random + 5 cluster repeats |
-| Fig S3 | Activity cliff evaluation | NB 2.10 | Model performance on activity cliff pairs |
-| Fig S4 | Molecular variant consistency | NB 2.13 | Chirality-aware ECFP4 partial stereoisomer resolution (median distance = 0.067, prediction CV = 0.006–0.018); scaffold decoration amplification (consistency ratio > 1); comparison to random-pair baseline |
+| Figure | Title | Source | File |
+|--------|-------|--------|------|
+| Fig 1 | Train vs test distance distributions | NB 0.02 | `train_vs_test_distances.png` |
+| Fig 2 | Butina cluster size distribution | NB 2.01 | `cluster_size_distribution.png` |
+| Fig 3 | Test-to-train 1-NN distance by splitting strategy | NB 2.06 | `distance_distributions_by_strategy.png` |
+| Fig 4 | Performance-over-distance curves (9 endpoints × 3 strategies) | NB 2.07 | `performance_over_distance.png` |
+| Fig 5 | IID vs OOD squared error distributions | NB 2.09 | `squared_error_distributions.png` |
+| Fig 6 | Intra-group fingerprint distances (stereo/scaffold/random) | NB 2.13 | `fingerprint_distances.png` |
+| Fig S1 | Baseline scatter (per-endpoint tuned, competition split) | NB 2.08 | `scatter_predictions.png` |
+| Fig S2 | Scaffold vs random vs cluster performance comparison | NB 2.11 | `metric_comparison.png` |
+| Fig S3 | Split variance RAE distributions (20 random + 5 cluster) | NB 2.12 | `rae_distributions.png` |
+| Fig S4 | Activity cliff squared error distributions | NB 2.10 | `squared_error_distributions.png` |
+| Fig S5 | Prediction CV by variant type | NB 2.13 | `prediction_consistency.png` |
+| Fig S6 | Predicted vs true range scatter by variant type | NB 2.13 | `spread_scatter.png` |
 
 ## Key References
 
