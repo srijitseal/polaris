@@ -18,6 +18,7 @@ from rdkit.ML.Descriptors.MoleculeDescriptors import MolecularDescriptorCalculat
 import json
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBRegressor
+from tqdm import tqdm
 
 from polaris_generalization.config import INTERIM_DATA_DIR, PROCESSED_DATA_DIR
 from polaris_generalization.visualization import DEFAULT_DPI, set_style
@@ -115,99 +116,114 @@ def main(
     set_style()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load data
-    df = pd.read_parquet(INTERIM_DATA_DIR / "expansion_tx.parquet")
-    cluster_folds = pd.read_parquet(INTERIM_DATA_DIR / "cluster_cv_folds.parquet")
-    cluster_folds = cluster_folds[cluster_folds["repeat"] == 0]
+    # 1. Define Cache Path
+    cache_path = output_dir / "raw_predictions_cache.json"
 
-    # Load resonance structures
-    resonance_df = pd.read_csv(
-        PROCESSED_DATA_DIR / "2.14-zalte-resonance-generation" / "resonance_structures.csv"
-    )
+    # 2. Check if Cache Exists
+    if cache_path.exists():
+        logger.info(f"Found existing predictions cache at {cache_path}. Loading data and skipping model training...")
+        with open(cache_path, "r") as f:
+            oof_predictions = json.load(f)
 
-    # Build resonance groups (canonicalized)
-    resonance_groups = {}
-    for _, row in resonance_df.iterrows():
-        parent = canonicalize_smiles(row["parent_smi"])
-        res_list = [canonicalize_smiles(s) for s in json.loads(row["resonance_smis"])]
-        resonance_groups[parent] = res_list
-
-    # Train + evaluate
-    oof_predictions = {}
-
-    for ep in ENDPOINTS:
-        mask = df[ep].notna()
-        ep_df = df[mask].copy()
-
-        if len(ep_df) < 50:
-            continue
-
-        # Keep original smiles for dictionary lookup later
-        orig_smiles = ep_df["SMILES"].tolist() 
-        names = ep_df["Molecule Name"].values
-        y = ep_df[ep].values
+    else:
+        logger.info("No cache found. Commencing model training and feature extraction...")
         
-        if ep in LOG_TRANSFORM_ENDPOINTS:
-            y = clip_and_log_transform(y)
+        # Load data
+        df = pd.read_parquet(INTERIM_DATA_DIR / "expansion_tx.parquet")
+        cluster_folds = pd.read_parquet(INTERIM_DATA_DIR / "cluster_cv_folds.parquet")
+        cluster_folds = cluster_folds[cluster_folds["repeat"] == 0]
 
-        # Train features are protonated
-        train_smiles = protonate_at_ph(orig_smiles, ENDPOINT_PH[ep])
-        X_fp = compute_bit_fp(train_smiles)
-        X_desc = compute_rdkit_descriptors(train_smiles)
+        # Load resonance structures
+        resonance_df = pd.read_csv(
+            PROCESSED_DATA_DIR / "2.14-zalte-resonance-generation" / "resonance_structures.csv"
+        )
 
-        scaler = StandardScaler()
-        X_desc = scaler.fit_transform(X_desc)
-        X = np.hstack([X_fp, X_desc])
+        # Build resonance groups (canonicalized)
+        resonance_groups = {}
+        for _, row in resonance_df.iterrows():
+            parent = canonicalize_smiles(row["parent_smi"])
+            res_list = [canonicalize_smiles(s) for s in json.loads(row["resonance_smis"])]
+            resonance_groups[parent] = res_list
 
-        fold_map = dict(zip(cluster_folds["Molecule Name"], cluster_folds["fold"]))
-        fold_ids = np.array([fold_map.get(n, -1) for n in names])
+        # Train + evaluate
+        oof_predictions = {}
 
-        for fold in set(fold_ids):
-            if fold < 0:
+        for ep in tqdm(ENDPOINTS, desc="Evaluating Endpoints"):
+            mask = df[ep].notna()
+            ep_df = df[mask].copy()
+
+            if len(ep_df) < 50:
                 continue
 
-            tr = fold_ids != fold
-            te = fold_ids == fold
+            orig_smiles = ep_df["SMILES"].tolist() 
+            names = ep_df["Molecule Name"].values
+            y = ep_df[ep].values
+            
+            if ep in LOG_TRANSFORM_ENDPOINTS:
+                y = clip_and_log_transform(y)
 
-            model = XGBRegressor(random_state=42, verbosity=0)
-            model.fit(X[tr], y[tr])
+            train_smiles = protonate_at_ph(orig_smiles, ENDPOINT_PH[ep])
+            X_fp = compute_bit_fp(train_smiles)
+            X_desc = compute_rdkit_descriptors(train_smiles)
 
-            # IMPORTANT: Iterate over orig_smiles to ensure dictionary lookup works
-            for name, smi_orig, true in zip(names[te], np.array(orig_smiles)[te], y[te]):
-                
-                smi_canon = canonicalize_smiles(smi_orig)
-                res_forms = resonance_groups.get(smi_canon, [smi_canon])
+            scaler = StandardScaler()
+            X_desc = scaler.fit_transform(X_desc)
+            X = np.hstack([X_fp, X_desc])
 
-                # SKIP protonation of res_forms to prevent destroying the resonance states
-                Xr = np.hstack([
-                    compute_bit_fp(res_forms),
-                    scaler.transform(compute_rdkit_descriptors(res_forms))
-                ])
+            fold_map = dict(zip(cluster_folds["Molecule Name"], cluster_folds["fold"]))
+            fold_ids = np.array([fold_map.get(n, -1) for n in names])
 
-                preds = model.predict(Xr)
+            for fold in set(fold_ids):
+                if fold < 0:
+                    continue
 
-                if name not in oof_predictions:
-                    oof_predictions[name] = {}
+                tr = fold_ids != fold
+                te = fold_ids == fold
 
-                oof_predictions[name][ep] = {
-                    "preds": preds.tolist(),
-                    "true": float(true),
-                }
+                model = XGBRegressor(random_state=42, verbosity=0)
+                model.fit(X[tr], y[tr])
 
+                for name, smi_orig, true in zip(names[te], np.array(orig_smiles)[te], y[te]):
+                    
+                    smi_canon = canonicalize_smiles(smi_orig)
+                    res_forms = resonance_groups.get(smi_canon, [smi_canon])
+
+                    Xr = np.hstack([
+                        compute_bit_fp(res_forms),
+                        scaler.transform(compute_rdkit_descriptors(res_forms))
+                    ])
+
+                    preds = model.predict(Xr)
+
+                    if name not in oof_predictions:
+                        oof_predictions[name] = {}
+
+                    oof_predictions[name][ep] = {
+                        "preds": preds.tolist(),
+                        "true": float(true),
+                    }
+
+        # Save Cache
+        with open(cache_path, "w") as f:
+            json.dump(oof_predictions, f, indent=4)
+        logger.info(f"Successfully cached raw predictions to {cache_path}")
+
+    # -----------------------------
     # Metrics - FILTERED to only those WITH resonance
+    # -----------------------------
+    logger.info("Calculating consistency metrics...")
     rows = []
     for name, ep_dict in oof_predictions.items():
         for ep, d in ep_dict.items():
             preds = np.array(d["preds"])
             true = d["true"]
 
-            # ONLY append if the molecule has multiple resonance forms
             if len(preds) > 1:
                 maes = np.abs(preds - true)
                 rows.append({
                     "molecule_name": name,
                     "endpoint": ep,
-                    "resonance_range": preds.ptp(), # ptp = peak to peak (max - min)
+                    "resonance_range": preds.max() - preds.min(),
                     "max_mae": maes.max(),
                     "min_mae": maes.min(),
                     "num_resonance_forms": len(preds)
