@@ -11,24 +11,22 @@ Input: Uses canonical dataset and cluster CV folds.
 Output: CSV with columns 'parent_smi', 'resonance_smis' (as a JSON list), 'num_resonance'.
 """
 
-import pandas as pd
 import json
-from tqdm import tqdm
 from pathlib import Path
-from rdkit import Chem
-from rdkit.Chem import ResonanceMolSupplier
-from rdkit.Chem import Draw
-import matplotlib.pyplot as plt
 
-from rdkit import RDLogger
+import matplotlib.pyplot as plt
+import pandas as pd
+from rdkit import Chem, RDLogger
+from rdkit.Chem import Draw, ResonanceMolSupplier
+from tqdm import tqdm
 
 # Disable RDKit warnings and errors from printing to the console
-RDLogger.DisableLog('rdApp.*')
+RDLogger.DisableLog("rdApp.*")
 
 
-def generate_resonance_structure_smis_rdkit(parent_smi: str,
-                                            max_structs: int = 50,
-                                            keep_stereo: bool = False):
+def generate_resonance_structure_smis_rdkit(
+    parent_smi: str, max_structs: int = 50, keep_stereo: bool = False
+):
     """
     Generate chemically reasonable resonance structures for a molecule using RDKit.
 
@@ -58,9 +56,11 @@ def generate_resonance_structure_smis_rdkit(parent_smi: str,
         # 1. Calculate parent properties for validation
         parent_abs_charge = sum(abs(a.GetFormalCharge()) for a in mol.GetAtoms())
         parent_radicals = sum(a.GetNumRadicalElectrons() for a in mol.GetAtoms())
-        
+
         # 2. Generate exact canonical SMILES for the parent
-        canon_parent_smi = Chem.MolToSmiles(mol, canonical=True, isomericSmiles=keep_stereo)
+        canon_parent_smi = Chem.MolToSmiles(
+            mol, canonical=True, isomericSmiles=keep_stereo
+        )
 
         def is_valid_resonance(res_mol):
             """Basic chemical validity, charge separation, and multiplicity check."""
@@ -73,7 +73,7 @@ def generate_resonance_structure_smis_rdkit(parent_smi: str,
             total_abs_charge = sum(abs(a.GetFormalCharge()) for a in res_mol.GetAtoms())
             if total_abs_charge > parent_abs_charge + 2:
                 return False
-                
+
             # Multiplicity / Radical check
             total_radicals = sum(a.GetNumRadicalElectrons() for a in res_mol.GetAtoms())
             if total_radicals != parent_radicals:
@@ -91,18 +91,24 @@ def generate_resonance_structure_smis_rdkit(parent_smi: str,
             if res_mol is None:
                 continue
             if is_valid_resonance(res_mol):
-                smi = Chem.MolToSmiles(res_mol, canonical=True, isomericSmiles=keep_stereo)
+                smi = Chem.MolToSmiles(
+                    res_mol, canonical=True, isomericSmiles=keep_stereo
+                )
                 if smi not in seen_smiles:
                     seen_smiles.add(smi)
                     final_list.append(smi)
 
         # --- Strategy 2: allow charge separation ---
-        suppl2 = ResonanceMolSupplier(mol, flags=Chem.ALLOW_CHARGE_SEPARATION, maxStructs=max_structs)
+        suppl2 = ResonanceMolSupplier(
+            mol, flags=Chem.ALLOW_CHARGE_SEPARATION, maxStructs=max_structs
+        )
         for res_mol in suppl2:
             if res_mol is None:
                 continue
             if is_valid_resonance(res_mol):
-                smi = Chem.MolToSmiles(res_mol, canonical=True, isomericSmiles=keep_stereo)
+                smi = Chem.MolToSmiles(
+                    res_mol, canonical=True, isomericSmiles=keep_stereo
+                )
                 if smi not in seen_smiles:
                     seen_smiles.add(smi)
                     final_list.append(smi)
@@ -145,10 +151,7 @@ def visualize_high_resonance_examples(df_out, n_samples=5, max_cols=3, output_di
             continue
 
         img = Draw.MolsToGridImage(
-            mols,
-            molsPerRow=max_cols,
-            subImgSize=(250, 250),
-            legends=legends
+            mols, molsPerRow=max_cols, subImgSize=(250, 250), legends=legends
         )
 
         if output_dir is not None:
@@ -187,19 +190,21 @@ def main():
     for row in tqdm(
         test_smis.itertuples(index=False),
         total=len(test_smis),
-        desc="Generating resonance structures"
+        desc="Generating resonance structures",
     ):
         name = row[0]
         smi = row[1]
 
         parent, res_smis, n = generate_resonance_structure_smis_rdkit(smi)
 
-        results.append({
-            "molecule_name": name,
-            "parent_smi": parent,
-            "resonance_smis": json.dumps(res_smis),
-            "num_resonance": n
-        })
+        results.append(
+            {
+                "molecule_name": name,
+                "parent_smi": parent,
+                "resonance_smis": json.dumps(res_smis),
+                "num_resonance": n,
+            }
+        )
 
     df_out = pd.DataFrame(results)
     df_out.to_csv(output_path, index=False)
@@ -209,9 +214,7 @@ def main():
     # -----------------------------
     # Visualize examples with high number of resonance forms
     # -----------------------------
-    visualize_high_resonance_examples(
-    df_out,
-    output_dir=processed_dir)
+    visualize_high_resonance_examples(df_out, output_dir=processed_dir)
 
     # -----------------------------
     # Analysis plot
@@ -225,8 +228,15 @@ def main():
     plt.ylabel("Number of Molecules")
     # add a text giving the average number of resonance structures
     avg_resonance = df_out["num_resonance"].mean()
-    plt.text(0.9, 0.9, f"Avg: {avg_resonance:.2f}", transform=plt.gca().transAxes,
-             fontsize=10, verticalalignment='top', horizontalalignment='right')
+    plt.text(
+        0.9,
+        0.9,
+        f"Avg: {avg_resonance:.2f}",
+        transform=plt.gca().transAxes,
+        fontsize=10,
+        verticalalignment="top",
+        horizontalalignment="right",
+    )
     plt.tight_layout()
     plt.savefig(processed_dir / "resonance_structures_distribution.png")
     plt.close()

@@ -1,8 +1,9 @@
 #!/usr/bin/env python
 """Molecular variant consistency analysis: Resonance Structures."""
 
-from itertools import combinations
+import json
 from collections import Counter
+from itertools import combinations
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -12,25 +13,30 @@ import seaborn as sns
 import typer
 from dimorphite_dl import protonate_smiles as dimorphite_protonate
 from loguru import logger
-from rdkit import Chem, DataStructs, RDLogger
-from rdkit.Chem import AllChem, Descriptors
-from rdkit.ML.Descriptors.MoleculeDescriptors import MolecularDescriptorCalculator
-import json
-from sklearn.preprocessing import StandardScaler
-from xgboost import XGBRegressor
-from tqdm import tqdm
-
 from polaris_generalization.config import INTERIM_DATA_DIR, PROCESSED_DATA_DIR
 from polaris_generalization.visualization import DEFAULT_DPI, set_style
+from rdkit import Chem, DataStructs, RDLogger
+from rdkit.Chem import AllChem, Descriptors
+from rdkit.ML.Descriptors.MoleculeDescriptors import \
+    MolecularDescriptorCalculator
+from sklearn.preprocessing import StandardScaler
+from tqdm import tqdm
+from xgboost import XGBRegressor
 
 RDLogger.DisableLog("rdApp.*")
 
 app = typer.Typer()
 
 ENDPOINTS = [
-    "LogD", "KSOL", "HLM CLint", "MLM CLint",
-    "Caco-2 Permeability Papp A>B", "Caco-2 Permeability Efflux",
-    "MPPB", "MBPB", "MGMB",
+    "LogD",
+    "KSOL",
+    "HLM CLint",
+    "MLM CLint",
+    "Caco-2 Permeability Papp A>B",
+    "Caco-2 Permeability Efflux",
+    "MPPB",
+    "MBPB",
+    "MGMB",
 ]
 
 LOG_TRANSFORM_ENDPOINTS = [ep for ep in ENDPOINTS if ep.lower() != "logd"]
@@ -61,7 +67,9 @@ def protonate_at_ph(smiles_list: list[str], ph: float) -> list[str]:
     out = []
     for smi in smiles_list:
         try:
-            res = dimorphite_protonate(smi, ph_min=ph - 0.5, ph_max=ph + 0.5, max_variants=1)
+            res = dimorphite_protonate(
+                smi, ph_min=ph - 0.5, ph_max=ph + 0.5, max_variants=1
+            )
             out.append(res[0] if res else smi)
         except Exception:
             out.append(smi)
@@ -73,7 +81,9 @@ def compute_bit_fp(smiles_list, nbits=2048, radius=2):
     for smi in smiles_list:
         mol = Chem.MolFromSmiles(smi)
         if mol:
-            fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius, nBits=nbits, useChirality=True)
+            fp = AllChem.GetMorganFingerprintAsBitVect(
+                mol, radius, nBits=nbits, useChirality=True
+            )
             fps.append(np.array(fp, dtype=np.uint8))
         else:
             fps.append(np.zeros(nbits, dtype=np.uint8))
@@ -93,7 +103,12 @@ def compute_rdkit_descriptors(smiles_list):
 
 def compute_tanimoto_distances_within_group(smiles_list):
     mols = [Chem.MolFromSmiles(s) for s in smiles_list]
-    fps = [AllChem.GetMorganFingerprintAsBitVect(m, 2, 2048, useChirality=True) if m else None for m in mols]
+    fps = [
+        AllChem.GetMorganFingerprintAsBitVect(m, 2, 2048, useChirality=True)
+        if m
+        else None
+        for m in mols
+    ]
 
     dists = []
     for i, j in combinations(range(len(fps)), 2):
@@ -121,13 +136,17 @@ def main(
 
     # 2. Check if Cache Exists
     if cache_path.exists():
-        logger.info(f"Found existing predictions cache at {cache_path}. Loading data and skipping model training...")
+        logger.info(
+            f"Found existing predictions cache at {cache_path}. Loading data and skipping model training..."
+        )
         with open(cache_path, "r") as f:
             oof_predictions = json.load(f)
 
     else:
-        logger.info("No cache found. Commencing model training and feature extraction...")
-        
+        logger.info(
+            "No cache found. Commencing model training and feature extraction..."
+        )
+
         # Load data
         df = pd.read_parquet(INTERIM_DATA_DIR / "expansion_tx.parquet")
         cluster_folds = pd.read_parquet(INTERIM_DATA_DIR / "cluster_cv_folds.parquet")
@@ -135,14 +154,18 @@ def main(
 
         # Load resonance structures
         resonance_df = pd.read_csv(
-            PROCESSED_DATA_DIR / "2.14-zalte-resonance-generation" / "resonance_structures.csv"
+            PROCESSED_DATA_DIR
+            / "2.14-zalte-resonance-generation"
+            / "resonance_structures.csv"
         )
 
         # Build resonance groups (canonicalized)
         resonance_groups = {}
         for _, row in resonance_df.iterrows():
             parent = canonicalize_smiles(row["parent_smi"])
-            res_list = [canonicalize_smiles(s) for s in json.loads(row["resonance_smis"])]
+            res_list = [
+                canonicalize_smiles(s) for s in json.loads(row["resonance_smis"])
+            ]
             resonance_groups[parent] = res_list
 
         # Train + evaluate
@@ -155,10 +178,10 @@ def main(
             if len(ep_df) < 50:
                 continue
 
-            orig_smiles = ep_df["SMILES"].tolist() 
+            orig_smiles = ep_df["SMILES"].tolist()
             names = ep_df["Molecule Name"].values
             y = ep_df[ep].values
-            
+
             if ep in LOG_TRANSFORM_ENDPOINTS:
                 y = clip_and_log_transform(y)
 
@@ -183,15 +206,18 @@ def main(
                 model = XGBRegressor(random_state=42, verbosity=0)
                 model.fit(X[tr], y[tr])
 
-                for name, smi_orig, true in zip(names[te], np.array(orig_smiles)[te], y[te]):
-                    
+                for name, smi_orig, true in zip(
+                    names[te], np.array(orig_smiles)[te], y[te]
+                ):
                     smi_canon = canonicalize_smiles(smi_orig)
                     res_forms = resonance_groups.get(smi_canon, [smi_canon])
 
-                    Xr = np.hstack([
-                        compute_bit_fp(res_forms),
-                        scaler.transform(compute_rdkit_descriptors(res_forms))
-                    ])
+                    Xr = np.hstack(
+                        [
+                            compute_bit_fp(res_forms),
+                            scaler.transform(compute_rdkit_descriptors(res_forms)),
+                        ]
+                    )
 
                     preds = model.predict(Xr)
 
@@ -220,14 +246,16 @@ def main(
 
             if len(preds) > 1:
                 maes = np.abs(preds - true)
-                rows.append({
-                    "molecule_name": name,
-                    "endpoint": ep,
-                    "resonance_range": preds.max() - preds.min(),
-                    "max_mae": maes.max(),
-                    "min_mae": maes.min(),
-                    "num_resonance_forms": len(preds)
-                })
+                rows.append(
+                    {
+                        "molecule_name": name,
+                        "endpoint": ep,
+                        "resonance_range": preds.max() - preds.min(),
+                        "max_mae": maes.max(),
+                        "min_mae": maes.min(),
+                        "num_resonance_forms": len(preds),
+                    }
+                )
 
     if not rows:
         logger.warning("No molecules with multiple resonance forms found. Exiting.")
@@ -236,7 +264,11 @@ def main(
     consistency_df = pd.DataFrame(rows)
     consistency_df.to_csv(output_dir / "consistency_metrics.csv", index=False)
 
-    summary = consistency_df.groupby("endpoint")[["resonance_range", "max_mae", "min_mae"]].mean().reset_index()
+    summary = (
+        consistency_df.groupby("endpoint")[["resonance_range", "max_mae", "min_mae"]]
+        .mean()
+        .reset_index()
+    )
     summary.to_csv(output_dir / "consistency_summary.csv", index=False)
 
     # Plot
@@ -250,6 +282,7 @@ def main(
     plt.close()
 
     logger.info("Done.")
+
 
 if __name__ == "__main__":
     app()
