@@ -18,16 +18,16 @@ Three analyses:
    different-scaffold pairs? Mann-Whitney U per distance bin, per endpoint.
 
 Usage:
-    pixi run -e cheminformatics python notebooks/2.15-araripe-scaffold-boundary.py
+    pixi run -e cheminformatics python notebooks/2.16-araripe-scaffold-boundary.py
 
 Outputs:
-    data/processed/2.15-araripe-scaffold-boundary/boundary_violations.csv
-    data/processed/2.15-araripe-scaffold-boundary/proximity_stats.csv
-    data/processed/2.15-araripe-scaffold-boundary/activity_concordance.csv
-    data/processed/2.15-araripe-scaffold-boundary/mann_whitney_tests.csv
-    data/processed/2.15-araripe-scaffold-boundary/cross_scaffold_proximity.png
-    data/processed/2.15-araripe-scaffold-boundary/activity_concordance.png
-    data/processed/2.15-araripe-scaffold-boundary/boundary_violation_summary.png
+    data/processed/2.16-araripe-scaffold-boundary/boundary_violations.csv
+    data/processed/2.16-araripe-scaffold-boundary/proximity_stats.csv
+    data/processed/2.16-araripe-scaffold-boundary/activity_concordance.csv
+    data/processed/2.16-araripe-scaffold-boundary/mann_whitney_tests.csv
+    data/processed/2.16-araripe-scaffold-boundary/cross_scaffold_proximity.png
+    data/processed/2.16-araripe-scaffold-boundary/activity_concordance.png
+    data/processed/2.16-araripe-scaffold-boundary/boundary_violation_summary.png
 """
 
 from pathlib import Path
@@ -99,7 +99,7 @@ def compute_scaffold_ids(smiles: list[str]) -> tuple[np.ndarray, dict[int, str]]
 @app.command()
 def main(
     output_dir: Path = typer.Option(
-        PROCESSED_DATA_DIR / "2.15-araripe-scaffold-boundary",
+        PROCESSED_DATA_DIR / "2.16-araripe-scaffold-boundary",
         help="Output directory",
     ),
     dpi: int = typer.Option(DEFAULT_DPI, help="DPI for saved figures"),

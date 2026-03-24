@@ -160,6 +160,46 @@ All strategies produced balanced fold sizes (max/min ratio < 1.12). Distance dis
 
 **Figures**: Figure S2 (performance comparison), Table S2 (per-endpoint RAE by strategy) — supplementary
 
+### 6b. Scaffold boundary analysis: scaffold splits are a blunt instrument you can't tune
+
+**Claim**: While the Murcko scaffold carries real, endpoint-specific biological signal (same-scaffold pairs have smaller activity differences at a given fingerprint distance), the scaffold *split procedure* cannot leverage this because of degenerate group sizes, pervasive cross-scaffold structural proximity, and lack of tunability. Distance-based methods let the user explicitly parametrize the degree of structural novelty.
+
+**Three analyses** (NB 2.16, no model needed — pure dataset analysis):
+
+**1. Scaffold boundary violations**:
+- For each molecule, identified nearest neighbor overall and nearest neighbor with a different Murcko scaffold
+- **56.2% boundary violation rate** (4,276/7,608 molecules): more than half of all molecules have their nearest neighbor in a *different* scaffold group
+- The scaffold boundary does not separate structurally similar molecules
+
+**2. Cross-scaffold proximity**:
+- Overall 1-NN median distance: 0.188; cross-scaffold 1-NN median: 0.233 — distributions nearly overlap
+- Within-scaffold 1-NN median (non-singletons): 0.206
+- 36.8% of non-singleton molecules have a closer cross-scaffold neighbor than within-scaffold
+- The most informative training molecule often sits on the wrong side of the scaffold boundary
+
+**3. Activity concordance conditioned on scaffold**:
+- All ~29M molecule pairs per endpoint, binned by Tanimoto distance (width 0.05)
+- Compared mean |Δactivity| for same-scaffold vs different-scaffold pairs per bin
+- 94/133 Mann-Whitney U tests significant (p < 0.05); expected by chance: 6.7
+- Among significant tests, 84/94 (89%) showed same-scaffold pairs having *smaller* activity differences
+- **Endpoint-specific patterns** reveal the scaffold carries real biological signal:
+  - Caco-2 Efflux: strongest effect — same-scaffold |Δy| flat (~0.25) while different-scaffold rises to 0.52 (P-gp substrate recognition is scaffold-dependent)
+  - HLM CLint, MLM CLint: strong consistent effect across all distance bins (CYP450 metabolic soft-spot accessibility)
+  - LogD: moderate, consistent gap (scaffold and substituents both contribute to partitioning)
+  - KSOL: effect *reverses* at high distances (>0.65) — crystal packing is scaffold-dependent but highly substituent-sensitive
+  - MBPB: mostly non-significant (protein binding may depend more on surface substituents)
+  - MGMB: sparse data (431 molecules), underpowered
+
+**Why scaffold splits fail despite real scaffold signal** (four reasons):
+1. **No tunability**: boundary is fixed by the Murcko decomposition — user cannot adjust degree of distribution shift
+2. **Degenerate size distribution**: 67.5% singletons → greedy assignment to folds ≈ random
+3. **Structural leakage**: 56.2% boundary violation rate → most informative training molecule on wrong side
+4. **Endpoint-agnostic**: scaffold effect varies dramatically across endpoints but split applies one boundary to all
+
+**Contrast with distance-based methods**: user controls cluster cutoff, number of clusters, minimum test-to-train distance. Degree of structural novelty is explicitly parametrized and can be matched to the deployment scenario.
+
+**Figures**: 3 figures in issue #16 (cross-scaffold proximity, activity concordance, boundary violation summary) — candidate for supplementary
+
 ### 7. Random cross-validation gives precise estimates of the wrong thing
 
 **Claim**: Random CV is highly reproducible but produces precise estimates of a quantity that does not correspond to deployment performance. The choice of splitting strategy is far more consequential than number of repeats.

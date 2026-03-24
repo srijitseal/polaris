@@ -20,7 +20,7 @@ The scaffold boundary is an untunable, arbitrary discretization of continuous ch
 
 ### The scaffold boundary is structurally leaky
 
-![Cross-scaffold proximity](../../../data/processed/2.15-araripe-scaffold-boundary/cross_scaffold_proximity.png)
+![Cross-scaffold proximity](../../../data/processed/2.16-araripe-scaffold-boundary/cross_scaffold_proximity.png)
 
 *Figure 1. Left: overall vs. cross-scaffold 1-NN distance distributions nearly overlap (medians 0.188 vs. 0.233). Center: among non-singleton molecules, within-scaffold and cross-scaffold 1-NN distributions are comparable. Right: cumulative fraction of molecules with a cross-scaffold neighbor within a given distance threshold.*
 
@@ -38,7 +38,7 @@ More than half of all molecules have their nearest neighbor in a *different* sca
 
 ### Scaffold membership carries endpoint-specific biological signal — but the split can't use it
 
-![Activity concordance](../../../data/processed/2.15-araripe-scaffold-boundary/activity_concordance.png)
+![Activity concordance](../../../data/processed/2.16-araripe-scaffold-boundary/activity_concordance.png)
 
 *Figure 2. Mean activity difference (|Δy|) as a function of Tanimoto distance, stratified by scaffold membership (same vs. different Murcko framework), for all 9 endpoints. At a given fingerprint distance, same-scaffold pairs tend to have smaller activity differences — but the magnitude and consistency of this effect is highly endpoint-specific.*
 
@@ -62,7 +62,7 @@ This endpoint-specificity is itself the problem: a scaffold split applies the *s
 
 ### Scaffold splits give you no control; distance-based splits are parametric
 
-![Boundary violation summary](../../../data/processed/2.15-araripe-scaffold-boundary/boundary_violation_summary.png)
+![Boundary violation summary](../../../data/processed/2.16-araripe-scaffold-boundary/boundary_violation_summary.png)
 
 *Figure 3. Left: scatter of within-scaffold vs. cross-scaffold 1-NN distance for non-singleton molecules — 36.8% have a closer neighbor in a different scaffold group (below diagonal). Right: fraction of same-scaffold pairs by distance bin, averaged across endpoints — same-scaffold pairs are a small minority at the distances relevant to model evaluation (>0.2).*
 
@@ -86,9 +86,9 @@ Distance-based methods avoid all four problems: the user sets the distance thres
 ## Reproduce
 
 ```bash
-pixi run -e cheminformatics python notebooks/2.15-araripe-scaffold-boundary.py
+pixi run -e cheminformatics python notebooks/2.16-araripe-scaffold-boundary.py
 ```
 
 ## Source
 
-`notebooks/2.15-araripe-scaffold-boundary.py`
+`notebooks/2.16-araripe-scaffold-boundary.py`
