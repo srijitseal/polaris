@@ -1,15 +1,15 @@
-# OOD performance degrades 1.4–12.0x vs IID when evaluating across chemical series
+# OOD performance degrades 1.0–7.4x vs IID when evaluating across chemical series
 
 ## Summary
 
-Training XGBoost on the largest chemical series (Butina cluster 0, n=2,572) and evaluating on held-out molecules from the same series (IID) vs a different series (cluster 1, n=1,301, OOD) shows consistent and often dramatic performance degradation. This is the "hero" example (paper Fig 7) — it works because this dataset uniquely provides both temporal ordering (for time-split within a series) and chemical series structure (for OOD evaluation across series). The result is intuitive but quantifying it requires dataset properties that public benchmarks almost never have.
+Training Optuna TPE-tuned XGBoost on the largest chemical series (Butina cluster 0, n=2,572) and evaluating on held-out molecules from the same series (IID) vs a different series (cluster 1, n=1,301, OOD) shows consistent and often dramatic performance degradation. This is the "hero" example (paper Fig 7) — it works because this dataset uniquely provides both temporal ordering (for time-split within a series) and chemical series structure (for OOD evaluation across series). The result is intuitive but quantifying it requires dataset properties that public benchmarks almost never have.
 
 ## Method
 
 1. **Select two largest Butina clusters** (cutoff 0.7, from notebook 2.01): cluster 0 (n=2,572) and cluster 1 (n=1,301). These represent two distinct chemical series from the Expansion Tx drug discovery campaigns.
 2. **Time-split cluster 0** using ordinal molecule index (E-XXXXXXX naming encodes temporal order): earlier 80% = train (n=2,057), later 20% = IID validation (n=515). This mimics how a medicinal chemist would deploy a model: train on past compounds, predict new ones in the same series.
 3. **Cluster 1 = OOD test set** (n=1,301). This mimics predicting an entirely different chemical series — a harder but common real-world scenario (e.g., hit-to-lead on a new scaffold).
-4. **Train default XGBoost** (`XGBRegressor(random_state=42)`, no hyperparameter tuning) per endpoint on ECFP4 (2048-bit) + full RDKit 2D descriptors (~200), with dimorphite_dl protonation at assay-relevant pH. No tuning is intentional — this is a case study about distribution shift, not model optimization.
+4. **Train Optuna TPE-tuned XGBoost** per endpoint on ECFP4 (2048-bit) + full RDKit 2D descriptors (~200), with dimorphite_dl protonation at assay-relevant pH. Hyperparameter optimization uses Optuna TPE Bayesian optimization (30 trials, 3-fold CV, MAE scoring) tuning 9 hyperparameters: `n_estimators`, `max_depth`, `learning_rate`, `subsample`, `colsample_bytree`, `min_child_weight`, `gamma`, `reg_alpha`, `reg_lambda`. See ADR-002 (`docs/decisions/002-optuna-hyperparameter-tuning.md`).
 5. **Compare squared error distributions** between IID and OOD predictions. Log-transform applied to all endpoints except LogD, matching the competition evaluation protocol.
 
 ## Key Findings
@@ -28,26 +28,28 @@ The distance distributions have near-zero overlap — IID molecules are structur
 
 | Endpoint | IID R² | OOD R² | IID Spearman | OOD Spearman | IID RAE | OOD RAE | IID median SE | OOD median SE | SE fold-change |
 |----------|--------|--------|-------------|-------------|---------|---------|--------------|--------------|----------------|
-| MPPB | 0.19 | -0.19 | 0.485 | -0.141 | 0.862 | 1.098 | 0.012 | 0.141 | **12.0x** |
-| KSOL | 0.24 | -0.04 | 0.491 | 0.225 | 0.816 | 0.975 | 0.050 | 0.478 | **9.6x** |
-| LogD | 0.50 | -0.11 | 0.730 | 0.356 | 0.676 | 1.064 | 0.151 | 0.771 | **5.1x** |
-| HLM CLint | -0.54 | -0.03 | 0.388 | 0.341 | 1.127 | 1.010 | 0.044 | 0.175 | **4.0x** |
-| MLM CLint | -0.12 | -0.38 | 0.508 | 0.090 | 1.014 | 1.149 | 0.079 | 0.290 | **3.7x** |
-| MBPB | 0.13 | -0.44 | 0.381 | 0.303 | 0.925 | 1.309 | 0.031 | 0.112 | **3.7x** |
-| Caco-2 Efflux | 0.46 | -0.07 | 0.754 | 0.268 | 0.607 | 1.037 | 0.052 | 0.134 | **2.6x** |
-| Caco-2 Papp A>B | 0.54 | -0.30 | 0.761 | 0.106 | 0.628 | 1.152 | 0.053 | 0.074 | **1.4x** |
+| MLM CLint | 0.08 | -1.07 | 0.458 | 0.121 | 0.931 | 1.451 | 0.078 | 0.577 | **7.4x** |
+| KSOL | 0.30 | 0.15 | 0.513 | 0.434 | 0.827 | 0.892 | 0.058 | 0.396 | **6.8x** |
+| MPPB | 0.15 | 0.14 | 0.383 | 0.460 | 0.934 | 0.938 | 0.020 | 0.118 | **5.9x** |
+| MBPB | 0.26 | -0.48 | 0.458 | 0.478 | 0.842 | 1.335 | 0.023 | 0.131 | **5.6x** |
+| LogD | 0.64 | 0.11 | 0.804 | 0.518 | 0.579 | 0.956 | 0.129 | 0.626 | **4.9x** |
+| HLM CLint | -0.12 | 0.04 | 0.415 | 0.175 | 0.963 | 0.977 | 0.033 | 0.157 | **4.7x** |
+| Caco-2 Efflux | 0.47 | -0.01 | 0.754 | 0.169 | 0.610 | 0.990 | 0.048 | 0.098 | **2.1x** |
+| Caco-2 Papp A>B | 0.44 | -0.09 | 0.709 | 0.240 | 0.699 | 1.059 | 0.067 | 0.067 | **1.0x** |
 
-R² goes negative on OOD for all 8 endpoints — the model is worse than predicting the mean when deployed on a new chemical series. Even LogD, the most well-covered endpoint (96% of molecules), now shows negative OOD R² (-0.11).
+R² goes negative on OOD for 3 of 8 endpoints (MLM CLint, MBPB, Caco-2 Papp A>B), and near-zero for 2 more (Caco-2 Efflux at -0.01, HLM CLint at 0.04). Tuning improves OOD R² relative to default XGBoost for most endpoints — notably KSOL (-0.04 to 0.15), MPPB (-0.19 to 0.14), and LogD (-0.11 to 0.11) — but the IID-to-OOD degradation pattern persists. MLM CLint actually worsens on OOD under tuning (R² -0.38 to -1.07), suggesting tuning can overfit to the training series for some endpoints.
 
-Spearman ρ collapses on OOD: from 0.38–0.76 (IID) to near-zero or negative (OOD) for most endpoints. RAE exceeds 1.0 on OOD for 7 of 8 endpoints (only KSOL at 0.975 stays just below), meaning the model is worse than predicting the mean — a baseline that requires no training at all.
+Spearman rho drops on OOD for most endpoints, though the decline is less severe than with default XGBoost: LogD 0.804 to 0.518, Caco-2 Efflux 0.754 to 0.169, Caco-2 Papp 0.709 to 0.240, MLM CLint 0.458 to 0.121. Two protein binding endpoints (MPPB, MBPB) are exceptions where OOD Spearman is comparable to or slightly exceeds IID, though both have small IID sample sizes (n=53, n=51).
 
-MPPB (12.0x) and KSOL (9.6x) show the largest SE fold-change, followed by LogD (5.1x). Caco-2 Papp A>B shows the smallest gap (1.4x), suggesting permeability may generalize better across series — possibly because it depends more on bulk molecular properties (size, polarity) than on specific pharmacophoric features.
+RAE exceeds 1.0 on OOD for 3 of 8 endpoints (MLM CLint 1.45, MBPB 1.34, Caco-2 Papp 1.06), an improvement from 7 of 8 with default XGBoost. The remaining endpoints hover just below 1.0 on OOD.
+
+The SE fold-change range is 1.0–7.4x (vs 1.4–12.0x with default XGBoost). MLM CLint shows the largest degradation (7.4x), while Caco-2 Papp A>B shows essentially no degradation in median SE (1.0x), though its OOD R² is still negative (-0.09).
 
 MGMB was skipped due to insufficient data in both clusters (only 431 molecules total, sparsely distributed).
 
 ### Why this matters
 
-Standard IID evaluation (random split or even time-split within a single series) dramatically overestimates real-world performance. When a model is deployed on a genuinely new chemical series — the common scenario in hit identification — performance collapses. This analysis is only possible because the Expansion Tx dataset provides:
+Standard IID evaluation (random split or even time-split within a single series) dramatically overestimates real-world performance. When a model is deployed on a genuinely new chemical series — the common scenario in hit identification — performance collapses. Hyperparameter tuning narrows the gap somewhat but does not eliminate it: the median SE fold-change across endpoints is still ~5x. This analysis is only possible because the Expansion Tx dataset provides:
 - **Chemical series structure**: Butina clustering identifies coherent series with hundreds of members
 - **Temporal ordering**: Ordinal molecule naming enables realistic time-split within a series
 
@@ -65,9 +67,9 @@ Public ADMET benchmarks typically lack both properties, making this kind of IID 
 <!-- Paste: mae_by_endpoint.png -->
 - `data/processed/2.09-seal-iid-vs-ood-series/r2_by_endpoint.png` — Per-endpoint R² comparison
 <!-- Paste: r2_by_endpoint.png -->
-- `data/processed/2.09-seal-iid-vs-ood-series/spearman_by_endpoint.png` — Per-endpoint Spearman ρ comparison
+- `data/processed/2.09-seal-iid-vs-ood-series/spearman_by_endpoint.png` — Per-endpoint Spearman rho comparison
 <!-- Paste: spearman_by_endpoint.png -->
-- `data/processed/2.09-seal-iid-vs-ood-series/kendall_by_endpoint.png` — Per-endpoint Kendall τ comparison
+- `data/processed/2.09-seal-iid-vs-ood-series/kendall_by_endpoint.png` — Per-endpoint Kendall tau comparison
 <!-- Paste: kendall_by_endpoint.png -->
 - `data/processed/2.09-seal-iid-vs-ood-series/rae_by_endpoint.png` — Per-endpoint RAE comparison
 <!-- Paste: rae_by_endpoint.png -->

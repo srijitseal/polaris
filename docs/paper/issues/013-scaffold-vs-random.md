@@ -10,7 +10,7 @@ Naive Bemis-Murcko scaffold splits produce nearly identical XGBoost performance 
    - **Scaffold split**: Compute generic Murcko scaffolds via RDKit, group molecules by scaffold, sort scaffolds by frequency (largest first), greedily assign each scaffold group to the fold with fewest molecules (5 folds)
    - **Random split**: 5-fold random assignment (seed=42)
    - **Cluster split**: Precomputed cluster-based folds from 2.03 (repeat 0, 5 folds)
-2. **Train and evaluate**: Default XGBoost on ECFP4 + RDKit 2D descriptors (protonated at assay pH), log-transformed targets (except LogD)
+2. **Train and evaluate**: Optuna TPE-tuned XGBoost (30 trials, 3-fold CV, 9 hyperparameters per endpoint per fold; see ADR-002) on ECFP4 + RDKit 2D descriptors (protonated at assay pH), log-transformed targets (except LogD)
 3. **Competition metrics**: MAE, R², Spearman ρ, Kendall τ, RAE per fold per endpoint
 4. **Distance characterization**: Pooled test-to-train 1-NN Tanimoto distances per strategy
 
@@ -20,9 +20,9 @@ Naive Bemis-Murcko scaffold splits produce nearly identical XGBoost performance 
 
 | Strategy | MA-RAE |
 |----------|--------|
-| Random | 0.480 |
-| Scaffold | 0.534 |
-| Cluster | 0.724 |
+| Random | 0.474 |
+| Scaffold | 0.510 |
+| Cluster | 0.672 |
 
 Scaffold and random splits produce similar metrics across all endpoints. Cluster-based splitting consistently produces worse performance — higher MAE, higher RAE, lower R², lower rank correlations — reflecting genuine distribution shift.
 
@@ -30,31 +30,31 @@ Scaffold and random splits produce similar metrics across all endpoints. Cluster
 
 | Endpoint | Scaffold | Random | Cluster |
 |----------|----------|--------|---------|
-| LogD | 0.397 | 0.365 | 0.545 |
-| KSOL | 0.564 | 0.511 | 0.726 |
-| HLM CLint | 0.661 | 0.614 | 0.877 |
-| MLM CLint | 0.602 | 0.548 | 0.790 |
-| Caco-2 Papp A>B | 0.514 | 0.475 | 0.710 |
-| Caco-2 Efflux | 0.456 | 0.421 | 0.655 |
-| MPPB | 0.563 | 0.486 | 0.720 |
-| MBPB | 0.493 | 0.423 | 0.657 |
-| MGMB | 0.561 | 0.480 | 0.838 |
+| LogD | 0.376 | 0.350 | 0.504 |
+| KSOL | 0.557 | 0.529 | 0.705 |
+| HLM CLint | 0.640 | 0.589 | 0.827 |
+| MLM CLint | 0.584 | 0.548 | 0.739 |
+| Caco-2 Papp A>B | 0.522 | 0.492 | 0.686 |
+| Caco-2 Efflux | 0.455 | 0.436 | 0.614 |
+| MPPB | 0.515 | 0.463 | 0.650 |
+| MBPB | 0.436 | 0.399 | 0.594 |
+| MGMB | 0.502 | 0.456 | 0.726 |
 
-Scaffold–random RAE differences are 0.03–0.08 (small). Cluster–random differences are 0.18–0.36 (large, consistent).
+Scaffold–random RAE differences are 0.02–0.06 (small). Cluster–random differences are 0.13–0.27 (large, consistent).
 
 ### Per-endpoint R² (mean across folds)
 
 | Endpoint | Scaffold | Random | Cluster |
 |----------|----------|--------|---------|
-| LogD | 0.820 | 0.842 | 0.672 |
-| KSOL | 0.565 | 0.637 | 0.377 |
-| HLM CLint | 0.523 | 0.581 | 0.164 |
-| MLM CLint | 0.610 | 0.671 | 0.338 |
-| Caco-2 Papp A>B | 0.650 | 0.696 | 0.396 |
-| Caco-2 Efflux | 0.715 | 0.753 | 0.470 |
-| MPPB | 0.621 | 0.706 | 0.438 |
-| MBPB | 0.678 | 0.748 | 0.509 |
-| MGMB | 0.572 | 0.671 | 0.117 |
+| LogD | 0.841 | 0.859 | 0.719 |
+| KSOL | 0.603 | 0.637 | 0.429 |
+| HLM CLint | 0.552 | 0.608 | 0.254 |
+| MLM CLint | 0.634 | 0.673 | 0.409 |
+| Caco-2 Papp A>B | 0.662 | 0.692 | 0.456 |
+| Caco-2 Efflux | 0.727 | 0.746 | 0.537 |
+| MPPB | 0.686 | 0.740 | 0.545 |
+| MBPB | 0.749 | 0.783 | 0.595 |
+| MGMB | 0.649 | 0.705 | 0.347 |
 
 ### Distance distributions
 
@@ -100,6 +100,7 @@ The cluster-based approach succeeds because it groups molecules by fingerprint s
 - `data/processed/2.11-seal-scaffold-vs-random/metric_rae.png` — RAE by endpoint
 - `data/processed/2.11-seal-scaffold-vs-random/metric_spearman_r.png` — Spearman ρ by endpoint
 - `data/processed/2.11-seal-scaffold-vs-random/metric_kendall_tau.png` — Kendall τ by endpoint
+- `data/processed/2.11-seal-scaffold-vs-random/scaffold_group_sizes.png` — Scaffold group size distribution
 
 ## Reproduce
 
