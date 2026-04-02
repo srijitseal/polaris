@@ -39,9 +39,9 @@ from scipy.spatial.distance import squareform
 from scipy.stats import kendalltau, spearmanr
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.preprocessing import StandardScaler
-from xgboost import XGBRegressor
 
 from polaris_generalization.config import INTERIM_DATA_DIR, PROCESSED_DATA_DIR
+from polaris_generalization.tuning import tune_xgboost
 from polaris_generalization.visualization import DEFAULT_DPI, set_style
 
 RDLogger.DisableLog("rdApp.*")
@@ -327,8 +327,8 @@ def main(
             if len(y_te) < 10:
                 continue
 
-            model = XGBRegressor(random_state=42, verbosity=0)
-            model.fit(X_tr, y_tr)
+            cache_dir = INTERIM_DATA_DIR / "optuna_cache"
+            model, _, _ = tune_xgboost(X_tr, y_tr, cache_dir=cache_dir, cache_key=f"{ep}_cluster_fold{fold_id}")
             y_pred = model.predict(X_te)
 
             se = (y_te - y_pred) ** 2

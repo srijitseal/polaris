@@ -103,7 +103,7 @@ All strategies produced balanced fold sizes (max/min ratio < 1.12). Distance dis
 
 **Claim**: Aggregate performance metrics hide systematic degradation at the frontier of the training distribution. A performance-over-distance curve reveals where models actually fail.
 
-**Model**: Fixed-architecture XGBoost (n_estimators=1000, max_depth=6, lr=0.1, subsample=0.8, colsample_bytree=0.4) — same config across all 9 endpoints and 3 split strategies to ensure performance differences reflect the splitting strategy, not tuning.
+**Model**: Optuna TPE-tuned XGBoost (30 trials, 3-fold CV, 9 hyperparameters per endpoint per fold) — same tuning procedure across all 9 endpoints and 3 split strategies to ensure performance differences reflect the splitting strategy, not arbitrary hyperparameter choices.
 
 **Key findings** (all 9 endpoints, competition metrics):
 - **Cluster-split** (MA-RAE 0.732) best overall — each fold sees structurally diverse training data
@@ -121,7 +121,7 @@ All strategies produced balanced fold sizes (max/min ratio < 1.12). Distance dis
 
 **Claim**: A model validated on historical compounds from a single program may appear excellent yet fail silently when applied to a new chemical series entering the pipeline. Uses two things normally unavailable in public datasets — time split and chemical series.
 
-**Setup** (default XGBoost):
+**Setup** (Optuna TPE-tuned XGBoost):
 - Train on largest Butina cluster (n=2,572), temporally split: first 80% (n=2,057) training, last 20% (n=515) IID validation
 - OOD test: second-largest cluster (n=1,301) — a structurally distinct chemical series, no molecules in common
 - IID 1-NN median distance: 0.288; OOD 1-NN median: 0.763 — nearly 3× further
@@ -145,7 +145,7 @@ All strategies produced balanced fold sizes (max/min ratio < 1.12). Distance dis
 
 **Claim**: Naive Bemis-Murcko scaffold splits provide no meaningful advantage over random splits. Distance-aware methods are necessary to ensure genuine structural separation.
 
-**Setup** (default XGBoost, 5-fold CV, all 9 endpoints):
+**Setup** (Optuna TPE-tuned XGBoost, 5-fold CV, all 9 endpoints):
 - Naive scaffold splits: greedy assignment of Murcko scaffold groups to 5 folds
 - Random splits: seed=42
 - Cluster-based splits: EKM + KMeans (as in section 3)
@@ -204,10 +204,10 @@ All strategies produced balanced fold sizes (max/min ratio < 1.12). Distance dis
 
 **Claim**: Random CV is highly reproducible but produces precise estimates of a quantity that does not correspond to deployment performance. The choice of splitting strategy is far more consequential than number of repeats.
 
-**Setup** (default XGBoost):
-- 20 independent random 5-fold CV repeats (seeds 0–19)
+**Setup** (Optuna TPE-tuned XGBoost):
+- 5 independent random 5-fold CV repeats (seeds 0–4)
 - 5 cluster-based split repeats (stochastic EKM + MiniBatchKMeans)
-- ~1,125 models total
+- ~450 models total
 
 **Key findings**:
 - Random splits: RAE std 0.002–0.012, ranges 0.009–0.055 — remarkably tight
@@ -227,7 +227,7 @@ All strategies produced balanced fold sizes (max/min ratio < 1.12). Distance dis
 
 **Definition**: Cliff pairs = Tanimoto similarity > 0.85 (ECFP4) + activity difference in top quartile among all such similar pairs for a given endpoint. Activity differences computed in log₁₀(x+1) space (matching target transform). Any molecule in ≥1 cliff pair labeled a cliff molecule.
 
-**Key findings** (default XGBoost, cluster-split CV, 5 folds):
+**Key findings** (Optuna TPE-tuned XGBoost, cluster-split CV, 5 folds):
 - Cliff molecules comprise 6–10% of molecules per endpoint
 - Cliff RAE exceeds non-cliff RAE for 7 of 9 endpoints:
   - Worst: HLM CLint cliff RAE = 0.901 vs non-cliff 0.857; Caco-2 Efflux cliff RAE = 0.882 vs non-cliff 0.641
@@ -244,7 +244,7 @@ All strategies produced balanced fold sizes (max/min ratio < 1.12). Distance dis
 
 **Claim**: The fingerprint's implicit similarity function may not align with the biological similarity function for the endpoint of interest. Two distinct failure modes: under-sensitivity to stereochemistry and amplification of scaffold decorations.
 
-**Stereoisomer analysis** (default XGBoost, cluster-split CV, 5 folds):
+**Stereoisomer analysis** (Optuna TPE-tuned XGBoost, cluster-split CV, 5 folds):
 - 548 stereoisomer groups (1,152 molecules, 15.1% of dataset) — pairs/sets of enantiomers and diastereomers
 - Chirality-aware ECFP4 (useChirality=True) produces non-zero but small distances (median 0.067, up from 0.000)
 - Prediction CV = 0.006–0.018 across all 9 endpoints — 10–20× lower than scaffold decorations (0.099–0.251) and random pairs (0.151–0.385)
@@ -334,10 +334,9 @@ All strategies produced balanced fold sizes (max/min ratio < 1.12). Distance dis
 - Performance-over-distance curves with sliding window bins (RMSE per bin)
 - Cross-validation with confidence intervals (5x5 CV where applicable)
 
-### Models (three configurations)
-- **Fixed-architecture XGBoost** (NB 2.07 — performance-over-distance): n_estimators=1000, max_depth=6, lr=0.1, subsample=0.8, colsample_bytree=0.4, min_child_weight=5, gamma=1.0, reg_alpha=0.1, reg_lambda=1.5. Same config across all 9 endpoints and 3 split strategies — ensures performance differences reflect the splitting strategy, not tuning artifacts.
-- **Per-endpoint tuned XGBoost** (NB 2.08 — baseline only): HalvingRandomSearchCV (50 candidates, factor=3, 3-fold CV, scoring=neg_MAE) on the competition train/test split (5,326/2,282). Establishes best achievable single-model performance on the original held-out test set.
-- **Default XGBoost** (NB 2.09–2.13 — all case studies): Default hyperparameters. Used for IID vs OOD, scaffold vs random, split variance, activity cliffs, molecular variant consistency. Identical default models across these analyses ensure observed differences arise from data partitioning or molecular subpopulation, not model configuration.
+### Models
+- **Optuna TPE-tuned XGBoost** (all notebooks): 30 trials of Bayesian optimization via Tree-structured Parzen Estimator (TPE), 3-fold inner CV, MAE scoring. 9 hyperparameters tuned: `n_estimators` (100–1000), `max_depth` (3–12), `learning_rate` (0.01–0.3, log), `subsample` (0.5–1.0), `colsample_bytree` (0.3–1.0), `min_child_weight` (1–10), `gamma` (0.0–5.0), `reg_alpha` (0.0–1.0), `reg_lambda` (0.5–3.0). Same tuning procedure applied uniformly across all 8 analysis notebooks (NB 2.07–2.13, 2.15) — ensures observed differences reflect splitting strategy or molecular subpopulation, not arbitrary hyperparameter choices.
+- Best parameters cached per (endpoint, split_strategy, fold) in JSON files (`data/interim/optuna_cache/`); tuning cost paid once, subsequent runs load cached params. Shared utility: `src/polaris_generalization/tuning.py` (ADR-002).
 - Focus is on evaluation framework, not model architecture
 
 ## Figures (current manuscript mapping)
@@ -352,7 +351,7 @@ All strategies produced balanced fold sizes (max/min ratio < 1.12). Distance dis
 | Fig 6 | Intra-group fingerprint distances (stereo/scaffold/random) | NB 2.13 | `fingerprint_distances.png` |
 | Fig S1 | Baseline scatter (per-endpoint tuned, competition split) | NB 2.08 | `scatter_predictions.png` |
 | Fig S2 | Scaffold vs random vs cluster performance comparison | NB 2.11 | `metric_comparison.png` |
-| Fig S3 | Split variance RAE distributions (20 random + 5 cluster) | NB 2.12 | `rae_distributions.png` |
+| Fig S3 | Split variance RAE distributions (5 random + 5 cluster) | NB 2.12 | `rae_distributions.png` |
 | Fig S4 | Activity cliff squared error distributions | NB 2.10 | `squared_error_distributions.png` |
 | Fig S5 | Prediction CV by variant type | NB 2.13 | `prediction_consistency.png` |
 | Fig S6 | Predicted vs true range scatter by variant type | NB 2.13 | `spread_scatter.png` |

@@ -37,9 +37,9 @@ from scipy.stats import kendalltau, spearmanr
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
-from xgboost import XGBRegressor
 
 from polaris_generalization.config import INTERIM_DATA_DIR, PROCESSED_DATA_DIR
+from polaris_generalization.tuning import tune_xgboost
 from polaris_generalization.visualization import DEFAULT_DPI, set_style
 
 RDLogger.DisableLog("rdApp.*")
@@ -168,22 +168,6 @@ def bin_performance(distances: np.ndarray, errors_sq: np.ndarray,
     return results
 
 
-def make_xgb_model() -> XGBRegressor:
-    """Create XGBoost model with fixed general-purpose config."""
-    return XGBRegressor(
-        n_estimators=1000,
-        max_depth=6,
-        learning_rate=0.1,
-        subsample=0.8,
-        colsample_bytree=0.4,
-        min_child_weight=5,
-        gamma=1.0,
-        reg_alpha=0.1,
-        reg_lambda=1.5,
-        tree_method="hist",
-        random_state=42,
-        verbosity=0,
-    )
 
 
 @app.command()
@@ -297,8 +281,8 @@ def main(
 
                 test_names = ep_names[test_idx]
 
-                model = make_xgb_model()
-                model.fit(X_train, y_train)
+                cache_dir = INTERIM_DATA_DIR / "optuna_cache"
+                model, _, _ = tune_xgboost(X_train, y_train, cache_dir=cache_dir, cache_key=f"{ep}_{strat_name}_fold{fold_id}")
                 y_pred = model.predict(X_test)
                 sq_errors = (y_pred - y_test) ** 2
 

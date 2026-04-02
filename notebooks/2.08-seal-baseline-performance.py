@@ -7,7 +7,7 @@ relevant assay pH using dimorphite_dl before feature computation:
   - pH 7.4: LogD, KSOL, HLM/MLM CLint, MPPB, MBPB, MGMB
   - pH 6.5: Caco-2 Papp A>B, Caco-2 Efflux (apical compartment)
 
-Uses HalvingRandomSearchCV to tune hyperparameters per endpoint via 3-fold CV.
+Uses Optuna TPE to tune hyperparameters per endpoint via 3-fold CV.
 For endpoints not already on log scale (everything except LogD), both training
 targets and evaluation are log-transformed via log10(clip(x, 1e-10) + 1),
 matching the OpenADMET competition evaluation protocol.
@@ -36,14 +36,12 @@ from loguru import logger
 from rdkit import Chem, RDLogger
 from rdkit.Chem import AllChem, Descriptors
 from rdkit.ML.Descriptors.MoleculeDescriptors import MolecularDescriptorCalculator
-from scipy.stats import kendalltau, randint, spearmanr, uniform
-from sklearn.experimental import enable_halving_search_cv  # noqa: F401
+from scipy.stats import kendalltau, spearmanr
 from sklearn.metrics import mean_absolute_error, r2_score
-from sklearn.model_selection import HalvingRandomSearchCV
 from sklearn.preprocessing import StandardScaler
-from xgboost import XGBRegressor
 
 from polaris_generalization.config import INTERIM_DATA_DIR, PROCESSED_DATA_DIR
+from polaris_generalization.tuning import tune_xgboost
 from polaris_generalization.visualization import DEFAULT_DPI, set_style
 
 RDLogger.DisableLog("rdApp.*")
@@ -179,20 +177,8 @@ def main(
 
         features_by_ph[ph] = {"X_train": X_tr, "X_test": X_te}
 
-    # ── 3. Hyperparameter search space ───────────────────────────────
-    param_distributions = {
-        "n_estimators": randint(100, 1000),
-        "max_depth": randint(3, 12),
-        "learning_rate": uniform(0.01, 0.29),  # 0.01 to 0.3
-        "subsample": uniform(0.5, 0.5),  # 0.5 to 1.0
-        "colsample_bytree": uniform(0.3, 0.7),  # 0.3 to 1.0
-        "min_child_weight": randint(1, 10),
-        "gamma": uniform(0, 5),
-        "reg_alpha": uniform(0, 1),
-        "reg_lambda": uniform(0.5, 2.5),
-    }
-
-    # ── 4. Train and evaluate per endpoint ────────────────────────────
+    # ── 3. Train and evaluate per endpoint ────────────────────────────
+    cache_dir = INTERIM_DATA_DIR / "optuna_cache"
     metric_rows = []
     prediction_rows = []
     best_params_rows = []
@@ -226,27 +212,10 @@ def main(
         baseline_mad = np.mean(np.abs(y_te - np.mean(y_te)))
 
         logger.info(f"  {ep} ({n_train} train, {n_test} test, pH={ph}) — tuning XGBoost")
-        search = HalvingRandomSearchCV(
-            XGBRegressor(
-                tree_method="hist",
-                random_state=42,
-                verbosity=0,
-            ),
-            param_distributions,
-            n_candidates=50,
-            factor=3,
-            cv=3,
-            scoring="neg_mean_absolute_error",
-            random_state=42,
-            verbose=0,
-        )
-        search.fit(X_tr, y_tr)
-        best = search.best_params_
-        logger.info(f"    Best params: {best} (CV MAE={-search.best_score_:.3f})")
+        model, best, _ = tune_xgboost(X_tr, y_tr, cache_dir=cache_dir, cache_key=f"{ep}_baseline")
+        logger.info(f"    Best params: {best}")
 
         best_params_rows.append({"endpoint": ep, "ph": ph, **best})
-
-        model = search.best_estimator_
         y_pred = model.predict(X_te)
 
         mae = mean_absolute_error(y_te, y_pred)
