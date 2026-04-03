@@ -1,4 +1,4 @@
-# Models perform consistently worse on activity cliff molecules across all 9 endpoints
+# Activity cliff molecules degrade model performance for 7 of 9 endpoints under cluster-split CV
 
 ## Summary
 
