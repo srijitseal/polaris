@@ -255,6 +255,43 @@ def main(
     ma_rae = metrics_df["rae"].mean()
     logger.info(f"MA-RAE: {ma_rae:.3f}")
 
+    # ── 4b. Bootstrap confidence intervals ───────────────────────────
+    n_boot = 1000
+    rng = np.random.default_rng(42)
+    boot_rows = []
+    for ep in metrics_df["endpoint"]:
+        ep_preds = [r for r in prediction_rows if r["endpoint"] == ep]
+        y_true = np.array([r["y_true"] for r in ep_preds])
+        y_pred = np.array([r["y_pred"] for r in ep_preds])
+        baseline_mad = metrics_df.loc[metrics_df["endpoint"] == ep, "baseline_mad"].values[0]
+        boot_mae, boot_r2, boot_sp, boot_rae = [], [], [], []
+        for _ in range(n_boot):
+            idx = rng.integers(0, len(y_true), size=len(y_true))
+            yt, yp = y_true[idx], y_pred[idx]
+            b_mae = mean_absolute_error(yt, yp)
+            boot_mae.append(b_mae)
+            boot_r2.append(r2_score(yt, yp))
+            boot_sp.append(spearmanr(yt, yp).statistic)
+            boot_rae.append(b_mae / baseline_mad if baseline_mad > 0 else np.nan)
+        boot_rows.append({
+            "endpoint": ep,
+            "mae_ci_lo": np.percentile(boot_mae, 2.5),
+            "mae_ci_hi": np.percentile(boot_mae, 97.5),
+            "r2_ci_lo": np.percentile(boot_r2, 2.5),
+            "r2_ci_hi": np.percentile(boot_r2, 97.5),
+            "spearman_ci_lo": np.percentile(boot_sp, 2.5),
+            "spearman_ci_hi": np.percentile(boot_sp, 97.5),
+            "rae_ci_lo": np.percentile(boot_rae, 2.5),
+            "rae_ci_hi": np.percentile(boot_rae, 97.5),
+        })
+        logger.info(
+            f"    {ep} 95% CI: R2=[{boot_rows[-1]['r2_ci_lo']:.3f}, {boot_rows[-1]['r2_ci_hi']:.3f}], "
+            f"RAE=[{boot_rows[-1]['rae_ci_lo']:.3f}, {boot_rows[-1]['rae_ci_hi']:.3f}]"
+        )
+    boot_df = pd.DataFrame(boot_rows)
+    metrics_df = metrics_df.merge(boot_df, on="endpoint")
+    logger.info(f"Bootstrap 95% CIs computed ({n_boot} resamples)")
+
     # ── 5. Save data ─────────────────────────────────────────────────
     metrics_df.to_csv(output_dir / "overall_metrics.csv", index=False)
     logger.info(f"Saved overall_metrics.csv ({len(metrics_df)} rows)")
@@ -272,6 +309,11 @@ def main(
     x = np.arange(len(active_endpoints))
     width = 0.6
 
+    ci_map = {
+        "r2": ("r2_ci_lo", "r2_ci_hi"),
+        "mae": ("mae_ci_lo", "mae_ci_hi"),
+        "spearman_r": ("spearman_ci_lo", "spearman_ci_hi"),
+    }
     for metric, ylabel, fname in [
         ("r2", "R²", "r2_by_endpoint"),
         ("mae", "MAE (log-scale)", "mae_by_endpoint"),
@@ -279,7 +321,12 @@ def main(
     ]:
         fig, ax = plt.subplots(figsize=(10, 5))
         vals = [metrics_df[metrics_df["endpoint"] == ep][metric].values[0] for ep in active_endpoints]
-        ax.bar(x, vals, width, color="steelblue", edgecolor="white", alpha=0.8)
+        lo_col, hi_col = ci_map[metric]
+        ci_lo = [metrics_df[metrics_df["endpoint"] == ep][lo_col].values[0] for ep in active_endpoints]
+        ci_hi = [metrics_df[metrics_df["endpoint"] == ep][hi_col].values[0] for ep in active_endpoints]
+        yerr = np.array([[v - lo, hi - v] for v, lo, hi in zip(vals, ci_lo, ci_hi)]).T
+        ax.bar(x, vals, width, color="steelblue", edgecolor="white", alpha=0.8,
+               yerr=yerr, capsize=4, error_kw={"linewidth": 1.2})
 
         ax.set_xticks(x)
         ax.set_xticklabels(active_endpoints, rotation=45, ha="right", fontsize=8)

@@ -18,17 +18,17 @@ Training XGBoost on ECFP4 fingerprints + RDKit 2D descriptors with per-endpoint 
 
 ### Per-endpoint results (final: XGBoost + Optuna TPE + full RDKit 2D + protonation)
 
-| Endpoint | pH | R2 | Spearman rho | RAE | n_train | n_test |
-|----------|-----|-----|-----------|-----|---------|--------|
-| LogD | 7.4 | 0.583 | 0.753 | 0.630 | 5,039 | 2,270 |
-| KSOL | 7.4 | 0.256 | 0.489 | 0.850 | 5,128 | 2,170 |
-| HLM CLint | 7.4 | 0.255 | 0.575 | 0.847 | 3,759 | 782 |
-| MLM CLint | 7.4 | 0.177 | 0.452 | 0.925 | 4,522 | 1,170 |
-| Caco-2 Papp A>B | 6.5 | 0.230 | 0.527 | 0.840 | 2,157 | 1,616 |
-| Caco-2 Efflux | 6.5 | 0.191 | 0.646 | 0.775 | 2,161 | 1,616 |
-| MPPB | 7.4 | 0.223 | 0.613 | 0.869 | 1,302 | 454 |
-| MBPB | 7.4 | 0.560 | 0.782 | 0.592 | 975 | 451 |
-| MGMB | 7.4 | 0.502 | 0.741 | 0.633 | 222 | 209 |
+| Endpoint | pH | R2 | R2 95% CI | Spearman rho | Spearman 95% CI | RAE | RAE 95% CI | n_train | n_test |
+|----------|-----|-----|-----------|-----------|-----------------|-----|------------|---------|--------|
+| LogD | 7.4 | 0.583 | [0.551, 0.613] | 0.753 | [0.732, 0.773] | 0.630 | [0.608, 0.652] | 5,039 | 2,270 |
+| KSOL | 7.4 | 0.256 | [0.193, 0.310] | 0.489 | [0.455, 0.520] | 0.850 | [0.826, 0.876] | 5,128 | 2,170 |
+| HLM CLint | 7.4 | 0.255 | [0.171, 0.332] | 0.575 | [0.524, 0.625] | 0.847 | [0.800, 0.895] | 3,759 | 782 |
+| MLM CLint | 7.4 | 0.177 | [0.102, 0.247] | 0.452 | [0.407, 0.497] | 0.925 | [0.884, 0.964] | 4,522 | 1,170 |
+| Caco-2 Papp A>B | 6.5 | 0.230 | [0.183, 0.276] | 0.527 | [0.492, 0.561] | 0.840 | [0.812, 0.867] | 2,157 | 1,616 |
+| Caco-2 Efflux | 6.5 | 0.191 | [0.147, 0.235] | 0.646 | [0.616, 0.677] | 0.775 | [0.740, 0.810] | 2,161 | 1,616 |
+| MPPB | 7.4 | 0.223 | [0.094, 0.328] | 0.613 | [0.550, 0.665] | 0.869 | [0.812, 0.928] | 1,302 | 454 |
+| MBPB | 7.4 | 0.560 | [0.494, 0.615] | 0.782 | [0.734, 0.821] | 0.592 | [0.548, 0.636] | 975 | 451 |
+| MGMB | 7.4 | 0.502 | [0.402, 0.592] | 0.741 | [0.651, 0.813] | 0.633 | [0.566, 0.703] | 222 | 209 |
 
 ### HalvingRandomSearchCV vs Optuna TPE comparison
 
@@ -58,6 +58,12 @@ Adding dimorphite_dl protonation and expanding from 16 hand-picked to ~200 RDKit
 ### Optuna TPE hyperparameter characteristics
 
 Optuna found notably different hyperparameters than HalvingRandomSearchCV -- generally lower learning rates (0.026-0.159), shallower trees for most endpoints (max_depth 3 for 6 of 9), and higher n_estimators (301-997). The combination of more trees with lower learning rate and shallower depth is consistent with a regularized ensemble that generalizes better to the test set.
+
+### Bootstrap confidence intervals
+
+To quantify uncertainty from the single train/test split, we computed 95% bootstrap confidence intervals using 1,000 resamples of the test-set predictions. Each resample draws n_test samples with replacement from the (y_true, y_pred) pairs and recomputes all metrics (R2, MAE, Spearman, RAE). The 2.5th and 97.5th percentiles define the 95% CI.
+
+CI widths vary substantially with test-set size. Endpoints with large test sets have tight CIs: LogD (n=2,270, R2 width 0.062), KSOL (n=2,170, width 0.117), and Caco-2 endpoints (n=1,616, widths 0.088-0.092). Endpoints with small test sets have wide CIs: MPPB (n=454, R2 width 0.234), MGMB (n=209, width 0.190), and HLM CLint (n=782, width 0.162). The wide CIs on MPPB and MGMB mean their point estimates are less reliable -- a 0.05 improvement on these endpoints may not be statistically meaningful on this split.
 
 ## Models
 
