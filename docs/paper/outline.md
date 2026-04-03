@@ -13,7 +13,7 @@ This paper sits between a review and an opinion paper. Instead of prescriptive "
 1. **Opportunity**: Machine learning models for molecular property prediction are increasingly used in drug discovery, but their real-world performance depends on generalization to novel chemical matter — a property that current benchmarks do not adequately measure.
 2. **Problem**: Standard benchmarks rely on random splits that leak structural information between train and test sets, and researchers frequently lack the industrial experience to ask the right validation questions, leading to claims that lack translational credibility.
 3. **Approach**: Here, we present a generalization evaluation framework using the Expansion Tx ADMET dataset (7,618 molecules, 10 ADME endpoints, 4 CROs + internal, from RNA-small molecule drug discovery) with splitting strategies that mimic real-world deployment and case studies that expose common failure modes.
-4. **Results**: We show that random splits overestimate performance by 51% (MA-RAE 0.480 vs 0.732 with cluster-based splitting), that naive scaffold splits offer no improvement over random (MA-RAE 0.534), and that models trained on one chemical series degrade 1.4–12.0× when applied to a different series. We further demonstrate that chirality-aware ECFP4 fingerprints partially resolve stereoisomer blindness but still under-predict true biological variation (15% of the dataset), that activity cliffs cause systematic prediction failures for 7 of 9 endpoints, and that random CV gives precise estimates of the wrong thing (tight variance at an optimistic level).
+4. **Results**: We show that random splits overestimate performance by 42% (MA-RAE 0.474 vs 0.672 with cluster-based splitting), that naive scaffold splits offer no improvement over random (MA-RAE 0.510), and that models trained on one chemical series degrade 1.0–7.4× when applied to a different series. We further demonstrate that chirality-aware ECFP4 fingerprints partially resolve stereoisomer blindness but still under-predict true biological variation (15% of the dataset), that activity cliffs cause systematic prediction failures for 7 of 9 endpoints, and that random CV gives precise estimates of the wrong thing (tight variance at an optimistic level).
 5. **Impact**: This framework enables the community to critically assess model generalization, moving beyond aggregate metrics to understand where and why models fail.
 
 ## Introduction (4 paragraphs)
@@ -106,14 +106,14 @@ All strategies produced balanced fold sizes (max/min ratio < 1.12). Distance dis
 **Model**: Optuna TPE-tuned XGBoost (30 trials, 3-fold CV, 9 hyperparameters per endpoint per fold) — same tuning procedure across all 9 endpoints and 3 split strategies to ensure performance differences reflect the splitting strategy, not arbitrary hyperparameter choices.
 
 **Key findings** (all 9 endpoints, competition metrics):
-- **Cluster-split** (MA-RAE 0.732) best overall — each fold sees structurally diverse training data
-- **Time-split** (MA-RAE 0.839) worse because early folds have small training sets (expanding window)
-- **Target-split** (MA-RAE 6.909) catastrophic — tree-based models fundamentally cannot extrapolate beyond training value range
+- **Cluster-split** (MA-RAE 0.673) best overall — each fold sees structurally diverse training data
+- **Time-split** (MA-RAE 0.771) worse because early folds have small training sets (expanding window)
+- **Target-split** (MA-RAE 6.118) catastrophic — tree-based models fundamentally cannot extrapolate beyond training value range
 - **Structural degradation**: cluster-split shows 2–4× RMSE degradation for most endpoints:
-  - LogD 3.98× (bulk thermodynamic property, but ECFP4 representation changes dramatically between distant scaffolds)
-  - HLM CLint 3.19× (metabolic soft spot accessibility diluted by rest of molecule in fingerprint)
-  - MLM CLint 1.95×, KSOL 1.87×
-  - Caco-2 endpoints show minimal degradation (Papp A>B 1.13×, Efflux 1.05×) — passive permeability governed by global properties (size, lipophilicity, H-bonding) captured by RDKit 2D descriptors
+  - LogD 3.60× (bulk thermodynamic property, but ECFP4 representation changes dramatically between distant scaffolds)
+  - HLM CLint 3.04× (metabolic soft spot accessibility diluted by rest of molecule in fingerprint)
+  - KSOL 1.98×, MBPB 1.90×, MGMB 1.87×
+  - Caco-2 endpoints show minimal degradation (Papp A>B 0.98×, Efflux 0.95×) — passive permeability governed by global properties (size, lipophilicity, H-bonding) captured by RDKit 2D descriptors
 
 **Figures**: Figure 4 (performance-over-distance curves, 9 endpoints × 3 strategies), Table 2 (per-endpoint RAE by strategy)
 
@@ -127,17 +127,17 @@ All strategies produced balanced fold sizes (max/min ratio < 1.12). Distance dis
 - IID 1-NN median distance: 0.288; OOD 1-NN median: 0.763 — nearly 3× further
 - Endpoint coverage verified: LogD/KSOL 98–100% in both clusters; clearance/permeability 25–73%; MGMB too sparse (7–17%) → excluded
 
-**Key findings**: Dramatic OOD degradation across all endpoints:
-- R² goes negative OOD for all 8 endpoints (model worse than predicting the mean)
-- Median squared error increases 1.4–12.0× (MPPB 12.0×, KSOL 9.6×, LogD 5.1×)
-- HLM CLint and MLM CLint already show negative R² on IID — clearance hard even within-series
-- Caco-2 Papp most robust (1.4× degradation) — consistent with performance-over-distance finding
-- LogD, despite best IID performance (R²=0.50), degrades 5.1× to R²=-0.11 on OOD — within-series performance is fundamentally unreliable predictor of cross-series generalization
+**Key findings**: Substantial OOD degradation across all endpoints:
+- R² goes negative OOD for 4 of 8 endpoints (MLM CLint −1.07, MBPB −0.48, Caco-2 Papp −0.09, Caco-2 Efflux −0.005)
+- Median squared error increases 1.0–7.4× (MLM CLint 7.4×, KSOL 6.8×, MPPB 5.9×, MBPB 5.6×, LogD 4.9×)
+- HLM CLint shows negative R² on IID (−0.12) — clearance hard even within-series
+- Caco-2 Papp most robust (1.0× degradation) — consistent with performance-over-distance finding
+- LogD, despite best IID performance (R²=0.64), degrades 4.9× to R²=0.11 on OOD — within-series performance is fundamentally unreliable predictor of cross-series generalization
 
 **Mechanistic interpretation**:
-- MPPB (12.0×): protein binding sensitive to specific hydrophobic surface topology, scaffold-dependent
-- KSOL (9.6×): solubility depends on crystal packing forces, highly scaffold-dependent
-- LogD (5.1×): ECFP4 representation changes between distant scaffolds even when global polarity conserved
+- MLM CLint (7.4×): tuning may overfit to training series SAR patterns; CYP450 metabolic soft-spot accessibility is highly scaffold-dependent
+- KSOL (6.8×): solubility depends on crystal packing forces, highly scaffold-dependent
+- LogD (4.9×): ECFP4 representation changes between distant scaffolds even when global polarity conserved
 
 **Figures**: Figure 5 (IID vs OOD squared error distributions), Table 3 (IID vs OOD metrics: R², Spearman, SE fold-change)
 
@@ -151,9 +151,9 @@ All strategies produced balanced fold sizes (max/min ratio < 1.12). Distance dis
 - Cluster-based splits: EKM + KMeans (as in section 3)
 
 **Key findings**:
-- Random MA-RAE: 0.480, Scaffold MA-RAE: 0.534, Cluster MA-RAE: 0.724
-- Scaffold-random RAE gap: only 0.03–0.08 per endpoint (negligible)
-- Scaffold-cluster RAE gap: 0.15–0.28 per endpoint (substantial)
+- Random MA-RAE: 0.474, Scaffold MA-RAE: 0.510, Cluster MA-RAE: 0.672
+- Scaffold-random RAE gap: only 0.02–0.06 per endpoint (negligible)
+- Scaffold-cluster RAE gap: 0.13–0.27 per endpoint (substantial)
 - 1-NN median distances: scaffold 0.246 vs random 0.203 vs cluster 0.424
 - **KS tests**: scaffold vs random D = 0.203 (modest), cluster vs random D = 0.662 (large), cluster vs scaffold D = 0.536, all p < 10^-10
 - **Structural explanation**: 3,337 unique Murcko scaffolds; 2,252 (67.5%) contain only a single molecule, median size 1. Greedy assignment of singletons to folds ≈ random assignment. Structurally similar molecules with different Murcko frameworks (ring size change, heteroatom substitution) get assigned to different groups but remain proximate in fingerprint space
@@ -230,10 +230,10 @@ All strategies produced balanced fold sizes (max/min ratio < 1.12). Distance dis
 **Key findings** (Optuna TPE-tuned XGBoost, cluster-split CV, 5 folds):
 - Cliff molecules comprise 6–10% of molecules per endpoint
 - Cliff RAE exceeds non-cliff RAE for 7 of 9 endpoints:
-  - Worst: HLM CLint cliff RAE = 0.901 vs non-cliff 0.857; Caco-2 Efflux cliff RAE = 0.882 vs non-cliff 0.641
-  - R² drops to 0.090 for MPPB cliffs (vs 0.495 non-cliff)
+  - Worst: HLM CLint cliff RAE = 0.861 vs non-cliff 0.807; Caco-2 Efflux cliff RAE = 0.827 vs non-cliff 0.606
+  - R² drops to 0.273 for MPPB cliffs (vs 0.591 non-cliff)
   - Spearman ρ consistently lower on cliffs across all 9 endpoints
-- **Two exceptions**: MLM CLint (cliff RAE 0.703 vs non-cliff 0.752) and MBPB (cliff 0.524 vs non-cliff 0.639)
+- **Two exceptions**: MLM CLint (cliff RAE 0.678 vs non-cliff 0.700) and MBPB (cliff 0.492 vs non-cliff 0.571)
   - MLM CLint: cliff pairs may have large value ranges that align with XGBoost's tree-splitting decisions
   - MBPB: small number of cliff pairs (47 pairs, 86 molecules) limits statistical power
 - Endpoints may be particularly cliff-prone when governed by specific structural motifs (CYP450 recognition, P-gp substrate features)
@@ -265,10 +265,10 @@ All strategies produced balanced fold sizes (max/min ratio < 1.12). Distance dis
 ## Discussions
 
 ### Summary of four failure modes
-- **Extrapolation failure** (IID vs OOD): 1.4–12.0× worse performance across chemical series boundaries, R² negative for all 8 endpoints on OOD — models trained on one series fail silently on a new series
-- **Interpolation failure** (activity cliffs): 6–10% of molecules show systematically higher error for 7 of 9 endpoints, cliff RAE up to 0.901 for HLM CLint — smoothness assumption violated
+- **Extrapolation failure** (IID vs OOD): 1.0–7.4× worse performance across chemical series boundaries, R² negative for 4 of 8 endpoints on OOD — models trained on one series fail silently on a new series
+- **Interpolation failure** (activity cliffs): 6–10% of molecules show systematically higher error for 7 of 9 endpoints, cliff RAE up to 0.861 for HLM CLint — smoothness assumption violated
 - **Representation failure** (molecular variants): chirality-aware ECFP4 partially resolves stereoisomer blindness but still under-predicts true biological variation (15% of dataset); scaffold decorations amplified beyond true biological variation (up to 4.2× for KSOL)
-- **Evaluation failure** (scaffold ≈ random; split variance): random CV gives precise estimates of the wrong thing; scaffold splits are indistinguishable from random (MA-RAE 0.534 vs 0.480); single cluster-split R² spans 0.12–0.53 for MGMB
+- **Evaluation failure** (scaffold ≈ random; split variance): random CV gives precise estimates of the wrong thing; scaffold splits are indistinguishable from random (MA-RAE 0.510 vs 0.474); single cluster-split R² spans 0.12–0.53 for MGMB
 - The framework connects evaluation choices to deployment scenarios (hit identification vs. lead optimization)
 - The Expansion Tx dataset uniquely enables these analyses due to its real-world provenance (ordinal ordering, chemical series, multi-endpoint coverage)
 
