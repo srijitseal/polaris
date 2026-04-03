@@ -36,9 +36,9 @@ from rdkit.ML.Descriptors.MoleculeDescriptors import MolecularDescriptorCalculat
 from scipy.stats import kendalltau, mannwhitneyu, spearmanr
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.preprocessing import StandardScaler
-from xgboost import XGBRegressor
 
 from polaris_generalization.config import INTERIM_DATA_DIR, PROCESSED_DATA_DIR
+from polaris_generalization.tuning import tune_xgboost
 from polaris_generalization.visualization import DEFAULT_DPI, set_style
 
 RDLogger.DisableLog("rdApp.*")
@@ -128,7 +128,7 @@ def main(
         PROCESSED_DATA_DIR / "2.12-seal-split-variance", help="Output directory"
     ),
     dpi: int = typer.Option(DEFAULT_DPI, help="DPI for saved figures"),
-    n_random_repeats: int = typer.Option(20, help="Number of random split repeats"),
+    n_random_repeats: int = typer.Option(5, help="Number of random split repeats"),
 ) -> None:
     set_style()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -193,8 +193,8 @@ def main(
                 if len(y_te) < 10 or len(y_tr) < 10:
                     continue
 
-                model = XGBRegressor(random_state=42, verbosity=0)
-                model.fit(X_tr, y_tr)
+                cache_dir = INTERIM_DATA_DIR / "optuna_cache"
+                model, _, _ = tune_xgboost(X_tr, y_tr, cache_dir=cache_dir, cache_key=f"{ep}_random_r{repeat}_fold{fold_id}")
                 y_pred = model.predict(X_te)
 
                 mae = mean_absolute_error(y_te, y_pred)
@@ -239,8 +239,7 @@ def main(
                 if len(y_te) < 10 or len(y_tr) < 10:
                     continue
 
-                model = XGBRegressor(random_state=42, verbosity=0)
-                model.fit(X_tr, y_tr)
+                model, _, _ = tune_xgboost(X_tr, y_tr, cache_dir=cache_dir, cache_key=f"{ep}_cluster_r{repeat}_fold{fold_id}")
                 y_pred = model.predict(X_te)
 
                 mae = mean_absolute_error(y_te, y_pred)

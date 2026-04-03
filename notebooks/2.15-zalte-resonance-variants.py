@@ -2,7 +2,6 @@
 """Molecular variant consistency analysis: Resonance Structures."""
 
 import json
-from collections import Counter
 from itertools import combinations
 from pathlib import Path
 
@@ -18,11 +17,10 @@ from rdkit.Chem import AllChem, Descriptors
 from rdkit.ML.Descriptors.MoleculeDescriptors import MolecularDescriptorCalculator
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
-from xgboost import XGBRegressor
 
 from polaris_generalization.config import INTERIM_DATA_DIR, PROCESSED_DATA_DIR
+from polaris_generalization.tuning import tune_xgboost
 from polaris_generalization.visualization import DEFAULT_DPI, set_style
-from scipy.stats import mannwhitneyu
 
 RDLogger.DisableLog("rdApp.*")
 
@@ -158,7 +156,7 @@ def main(
     rng = np.random.default_rng(42)
     n_random_pairs = min(10000, len(fp_sim_rows))
     random_indices = rng.integers(0, len(all_smiles), size=(n_random_pairs, 2))
-    
+
     for i, j in random_indices:
         if i == j: continue
         dists = compute_tanimoto_distances_within_group([all_smiles[i], all_smiles[j]])
@@ -179,7 +177,7 @@ def main(
 
     if cache_path.exists():
         logger.info(f"Loading predictions cache from {cache_path}...")
-        with open(cache_path, "r") as f:
+        with open(cache_path) as f:
             oof_predictions = json.load(f)
     else:
         logger.info("No cache found. Training models...")
@@ -211,8 +209,8 @@ def main(
                 if fold < 0: continue
                 tr, te = fold_ids != fold, fold_ids == fold
 
-                model = XGBRegressor(random_state=42, verbosity=0)
-                model.fit(X[tr], y[tr])
+                cache_dir = INTERIM_DATA_DIR / "optuna_cache"
+                model, _, _ = tune_xgboost(X[tr], y[tr], cache_dir=cache_dir, cache_key=f"{ep}_cluster_fold{fold}")
 
                 for name, smi_orig, true in zip(names[te], np.array(orig_smiles)[te], y[te]):
                     smi_canon = canonicalize_smiles(smi_orig)
@@ -238,7 +236,7 @@ def main(
     # -----------------------------
     logger.info("Calculating metrics...")
     rows = []
-    
+
     # 1. Resonance Metrics
     for name, ep_dict in oof_predictions.items():
         orig_smi = name_to_orig_smi.get(name)
@@ -253,7 +251,7 @@ def main(
                 pred_mean = np.mean(preds)
                 pred_std = np.std(preds)
                 pred_cv = pred_std / abs(pred_mean) if abs(pred_mean) > 1e-10 else np.nan
-                
+
                 fp_stats = fp_dists_per_mol.get(smi_canon, {"max_dist": np.nan, "mean_dist": np.nan})
 
                 rows.append({
@@ -274,20 +272,20 @@ def main(
         # Get all molecules that have a prediction for this endpoint
         ep_mols = [name for name in oof_predictions if ep in oof_predictions[name]]
         if len(ep_mols) < 2: continue
-        
+
         n_random = min(1000, len(ep_mols))
         for _ in range(n_random):
             m1, m2 = rng.choice(ep_mols, 2, replace=False)
-            
+
             # Use the first resonance prediction to represent the base molecule's prediction
             p1 = oof_predictions[m1][ep]["preds"][0]
             p2 = oof_predictions[m2][ep]["preds"][0]
-            
+
             preds = np.array([p1, p2])
             pred_mean = np.mean(preds)
             pred_std = np.std(preds)
             pred_cv = pred_std / abs(pred_mean) if abs(pred_mean) > 1e-10 else np.nan
-            
+
             rows.append({
                 "molecule_name": f"random_{m1}_{m2}",
                 "endpoint": ep,
@@ -343,18 +341,18 @@ def main(
     for ax_idx, ep in enumerate(active_endpoints):
         ax = axes[ax_idx]
         ep_data = consistency_df[consistency_df["endpoint"] == ep].dropna(subset=["pred_cv"])
-        
+
         if len(ep_data) == 0:
             ax.set_visible(False)
             continue
-            
+
         # 1. Calculate n for labels (using FULL dataset)
         res_mask = ep_data["variant_type"] == "resonance"
         rand_mask = ep_data["variant_type"] == "random"
         res_data = ep_data[res_mask]["pred_cv"].values
         n_res = len(res_data)
         n_rand = rand_mask.sum()
-        
+
         # 2. Subsample data for the DOTS ONLY to prevent the "wall of static"
         # This randomly selects a maximum of 300 points per group for a clean visual
         dot_data = pd.concat([
@@ -365,18 +363,18 @@ def main(
         # 3. Zoom the camera to the 95th percentile of resonance (fixes the pancake effect)
         if n_res > 0:
             # 95th percentile * 2.5 gives perfect breathing room for the box
-            plot_ymax = np.percentile(res_data, 95) * 2.5 
+            plot_ymax = np.percentile(res_data, 95) * 2.5
         else:
             plot_ymax = 1.0
 
         # 4. Draw Boxplot on the FULL data (showfliers=False hides extreme whiskers)
         sns.boxplot(
-            data=ep_data, x="variant_type", y="pred_cv", ax=ax, 
+            data=ep_data, x="variant_type", y="pred_cv", ax=ax,
             hue="variant_type", legend=False,
-            palette={"resonance": "coral", "random": "lightgray"}, 
+            palette={"resonance": "coral", "random": "lightgray"},
             width=0.4, showfliers=False, boxprops=dict(alpha=0.7)
         )
-        
+
         # 5. Overlay dots using the SUBSAMPLED data (nice and clean!)
         sns.stripplot(
             data=dot_data, x="variant_type", y="pred_cv", ax=ax,
@@ -384,7 +382,7 @@ def main(
             palette={"resonance": "darkred", "random": "dimgray"},
             size=2.5, alpha=0.6, jitter=True, zorder=1
         )
-        
+
         # Lock the y-limits to our zoomed range
         ax.set_ylim(bottom=-0.05 * plot_ymax, top=plot_ymax)
 
@@ -393,7 +391,7 @@ def main(
         ax.set_xticks([0, 1])
         ax.set_xticklabels([f"Resonance\n(n={n_res})", f"Random\n(n={n_rand})"], fontsize=10)
         ax.set_xlabel("")
-        
+
         if ax_idx % ncols == 0:
             ax.set_ylabel("Prediction CV (Spread / Mean)", fontsize=11)
         else:
