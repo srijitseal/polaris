@@ -212,9 +212,9 @@ All strategies produced balanced fold sizes (max/min ratio < 1.12). Distance dis
 **Key findings**:
 - Random splits: RAE std 0.002–0.012, ranges 0.009–0.055 — remarkably tight
 - Cluster splits: 3–17× wider ranges (0.057–0.185), RAE std 0.020–0.060
-- MGMB most extreme: cluster R² spans 0.117–0.531 across 5 repeats — "poor" or "moderate" depending on seed
-- **Mann-Whitney U tests**: U = 100.0, p < 10^-4 for all 9 endpoints — cluster and random RAE distributions entirely non-overlapping
-- MA-RAE gap between strategies (~0.23) dwarfs within-strategy variance by an order of magnitude
+- MGMB most extreme: cluster R² spans 0.299–0.577 across 5 repeats — "poor" or "moderate" depending on seed
+- **Mann-Whitney U tests**: U = 25.0, p = 0.0079 for all 9 endpoints — cluster and random RAE distributions entirely non-overlapping (U=25 is maximum possible for n1=n2=5; p=0.0079 is minimum achievable)
+- MA-RAE gap between strategies (~0.20) dwarfs within-strategy variance by an order of magnitude
 - Random splits leak structurally similar molecules across fold boundaries (median test-to-train 1-NN of 0.203)
 
 **Practical recommendation**: Use distance-aware splits with multiple repeats and report confidence intervals. Five cluster repeats with wide CIs give an honest picture; 20 random repeats with narrow CIs give false confidence.
@@ -247,7 +247,7 @@ All strategies produced balanced fold sizes (max/min ratio < 1.12). Distance dis
 **Stereoisomer analysis** (Optuna TPE-tuned XGBoost, cluster-split CV, 5 folds):
 - 548 stereoisomer groups (1,152 molecules, 15.1% of dataset) — pairs/sets of enantiomers and diastereomers
 - Chirality-aware ECFP4 (useChirality=True) produces non-zero but small distances (median 0.067, up from 0.000)
-- Prediction CV = 0.006–0.018 across all 9 endpoints — 10–20× lower than scaffold decorations (0.099–0.251) and random pairs (0.151–0.385)
+- Prediction CV = 0.000–0.015 across all 9 endpoints — 10–50× lower than scaffold decorations (0.074–0.442) and random pairs (0.128–0.404)
 - Only 3 of ~200 RDKit 2D descriptors differ between stereoisomers (`NumAtomStereoCenters`, `NumUnspecifiedAtomStereoCenters`, `Ipc`), contributing negligibly
 - Consistency ratios < 1 for most endpoints — model *under-predicts* true biological variation between enantiomers
 - Biological significance: (R)/(S)-enantiomers can differ by orders of magnitude in clearance (stereoselective CYP450), binding (chiral pockets), efflux (stereoselective P-gp)
@@ -255,20 +255,28 @@ All strategies produced balanced fold sizes (max/min ratio < 1.12). Distance dis
 **Scaffold decoration analysis**:
 - 1,050 scaffold decoration groups (3,835 molecules, 50.4%) — analogs sharing same Bemis-Murcko core, size 2–20
 - Median intra-group Tanimoto distance 0.349; prediction CV 2–3× lower than random pairs (model learns scaffold-level trends)
-- Consistency ratios > 1 across most endpoints (up to 4.2× for KSOL, 2.6× for Caco-2 Papp A>B) — model *amplifies* substituent effects beyond true biological variation
+- Consistency ratios > 1 across most endpoints (up to 3.4× for KSOL, 2.0× for Caco-2 Papp A>B) — model *amplifies* substituent effects beyond true biological variation
 - Amplification mechanism: single atom change in decoration modifies all circular substructures including that atom, flipping dozens of ECFP4 bits
+
+**Resonance form analysis** (Optuna TPE-tuned XGBoost, cluster-split CV, 5 folds):
+- 7,017 molecules (92.2%) have >1 tautomeric/resonance form (median 4, max 9)
+- Resonance forms — chemically identical molecules — have median ECFP4 Tanimoto distance of 0.494 (cf. scaffold decorations 0.349, stereoisomers 0.067, random pairs 0.849)
+- Prediction CV 0.05–0.96 (median) across endpoints; LogD most unstable (0.962) due to values spanning zero amplifying the CV denominator
+- Most endpoints show resonance CV *lower* than random-pair CV (model recognizes partial similarity), but LogD (0.96 vs 0.23) and Caco-2 Papp (0.22 vs 0.19) show resonance exceeding random
+- Tautomeric rearrangements alter bond orders, aromaticity flags, and hydrogen positions — fundamentally changing the molecular graph that Morgan fingerprints encode
+- Highlights a representation-level vulnerability: canonicalization choices (which tautomer to featurize) can shift predictions substantially
 
 **Practical caveat**: Many public/pharma datasets contain unreliable stereochemistry annotations (racemic synthesis, incomplete chiral separation). Chirality-aware modeling can be counterproductive by fitting noise.
 
-**Figures**: Figure 6 (fingerprint distances), Table 4 (prediction consistency), Figures S5–S6 (prediction CV, spread scatter) — supplementary
+**Figures**: Figure 6 (fingerprint distances), Table 4 (prediction consistency), Figures S5–S6 (prediction CV, spread scatter), Figures S7–S8 (resonance fingerprint distances, resonance prediction consistency) — supplementary
 
 ## Discussions
 
 ### Summary of four failure modes
 - **Extrapolation failure** (IID vs OOD): 1.0–7.4× worse performance across chemical series boundaries, R² negative for 4 of 8 endpoints on OOD — models trained on one series fail silently on a new series
 - **Interpolation failure** (activity cliffs): 6–10% of molecules show systematically higher error for 7 of 9 endpoints, cliff RAE up to 0.861 for HLM CLint — smoothness assumption violated
-- **Representation failure** (molecular variants): chirality-aware ECFP4 partially resolves stereoisomer blindness but still under-predicts true biological variation (15% of dataset); scaffold decorations amplified beyond true biological variation (up to 4.2× for KSOL)
-- **Evaluation failure** (scaffold ≈ random; split variance): random CV gives precise estimates of the wrong thing; scaffold splits are indistinguishable from random (MA-RAE 0.510 vs 0.474); single cluster-split R² spans 0.12–0.53 for MGMB
+- **Representation failure** (molecular variants): chirality-aware ECFP4 partially resolves stereoisomer blindness but still under-predicts true biological variation (15% of dataset); scaffold decorations amplified beyond true biological variation (up to 3.4× for KSOL); resonance form enumeration reveals fingerprint instability (median Tanimoto 0.494 between chemically identical molecules, prediction CV 0.05–0.96)
+- **Evaluation failure** (scaffold ≈ random; split variance): random CV gives precise estimates of the wrong thing; scaffold splits are indistinguishable from random (MA-RAE 0.510 vs 0.474); single cluster-split R² spans 0.30–0.58 for MGMB
 - The framework connects evaluation choices to deployment scenarios (hit identification vs. lead optimization)
 - The Expansion Tx dataset uniquely enables these analyses due to its real-world provenance (ordinal ordering, chemical series, multi-endpoint coverage)
 
@@ -355,6 +363,8 @@ All strategies produced balanced fold sizes (max/min ratio < 1.12). Distance dis
 | Fig S4 | Activity cliff squared error distributions | NB 2.10 | `squared_error_distributions.png` |
 | Fig S5 | Prediction CV by variant type | NB 2.13 | `prediction_consistency.png` |
 | Fig S6 | Predicted vs true range scatter by variant type | NB 2.13 | `spread_scatter.png` |
+| Fig S7 | Resonance form fingerprint distance distributions | NB 2.15 | `fingerprint_distances.png` |
+| Fig S8 | Resonance form prediction consistency | NB 2.15 | `prediction_consistency.png` |
 
 ## Key References
 
