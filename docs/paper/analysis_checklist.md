@@ -8,6 +8,7 @@ Status tracking for all planned analyses. This is the source of truth for analys
 |--------|----------|-------------|
 | DONE | `0.01-seal-dataset-exploration.py` | Initial Expansion Tx dataset exploration: load raw + ML-ready CSVs, count molecules/endpoints, check missingness, endpoint coverage, CRO distribution, physicochemical property characterization |
 | DONE | `0.02-seal-ecfp-distance-exploration.py` | ECFP fingerprint and distance exploration: compute ECFP4 fingerprints, all-pairwise Tanimoto distances, 1-NN and 5-NN distance distributions |
+| TODO | `0.03-araripe-chembl-tanimoto.py` | ChEMBL Tanimoto similarity: max Tanimoto of each ExpansionRX compound to ChEMBL 36 (all compounds + ADME subset), distribution plots for SI |
 
 ## Phase 1: Data Loading
 

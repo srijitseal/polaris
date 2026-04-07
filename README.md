@@ -15,6 +15,10 @@ pixi install
 bash scripts/download_data.sh
 ```
 
+### ChEMBL data (notebook 0.03)
+
+Notebook `0.03-araripe-chembl-tanimoto.py` uses `chembl_downloader` to query the ChEMBL 36 SQLite database (~4GB). The database is downloaded automatically on first run and cached at `~/.data/chembl/` by [pystow](https://github.com/cthoyt/pystow). Fingerprint caches (~600MB) are stored in `data/interim/`.
+
 ## Data
 
 The dataset is from the [OpenADMET Expansion Rx Challenge](https://huggingface.co/datasets/openadmet/openadmet-expansionrx-challenge-data) — real-world ADMET data from Expansion Therapeutics' RNA-targeted drug discovery campaigns.
