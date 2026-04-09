@@ -36,7 +36,8 @@ def tune_xgboost(
     """
     # Check cache
     if cache_dir and cache_key:
-        cache_file = Path(cache_dir) / f"{cache_key}.json"
+        safe_key = cache_key.replace(">", "_").replace("<", "_")
+        cache_file = Path(cache_dir) / f"{safe_key}.json"
         if cache_file.exists():
             params = json.loads(cache_file.read_text())
             model = XGBRegressor(**params, tree_method="hist", random_state=random_state, verbosity=0)
@@ -70,7 +71,8 @@ def tune_xgboost(
 
     # Save to cache
     if cache_dir and cache_key:
-        cache_file = Path(cache_dir) / f"{cache_key}.json"
+        safe_key = cache_key.replace(">", "_").replace("<", "_")
+        cache_file = Path(cache_dir) / f"{safe_key}.json"
         cache_file.parent.mkdir(parents=True, exist_ok=True)
         cache_file.write_text(json.dumps(study.best_params, indent=2))
 

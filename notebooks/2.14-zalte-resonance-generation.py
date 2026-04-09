@@ -16,12 +16,24 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pandas as pd
+from dimorphite_dl import protonate_smiles as dimorphite_protonate
 from rdkit import Chem, RDLogger
 from rdkit.Chem import Draw, ResonanceMolSupplier
 from tqdm import tqdm
 
 # Disable RDKit warnings and errors from printing to the console
 RDLogger.DisableLog("rdApp.*")
+
+
+def protonate_at_ph(smiles_list: list[str], ph: float) -> list[str]:
+    out = []
+    for smi in smiles_list:
+        try:
+            res = dimorphite_protonate(smi, ph_min=ph - 0.5, ph_max=ph + 0.5, max_variants=1)
+            out.append(res[0] if res else smi)
+        except Exception:
+            out.append(smi)
+    return out
 
 
 def generate_resonance_structure_smis_rdkit(
@@ -98,20 +110,20 @@ def generate_resonance_structure_smis_rdkit(
                     seen_smiles.add(smi)
                     final_list.append(smi)
 
-        # --- Strategy 2: allow charge separation ---
-        suppl2 = ResonanceMolSupplier(
-            mol, flags=Chem.ALLOW_CHARGE_SEPARATION, maxStructs=max_structs
-        )
-        for res_mol in suppl2:
-            if res_mol is None:
-                continue
-            if is_valid_resonance(res_mol):
-                smi = Chem.MolToSmiles(
-                    res_mol, canonical=True, isomericSmiles=keep_stereo
-                )
-                if smi not in seen_smiles:
-                    seen_smiles.add(smi)
-                    final_list.append(smi)
+        # # --- Strategy 2: allow charge separation ---
+        # suppl2 = ResonanceMolSupplier(
+        #     mol, flags=Chem.ALLOW_CHARGE_SEPARATION, maxStructs=max_structs
+        # )
+        # for res_mol in suppl2:
+        #     if res_mol is None:
+        #         continue
+        #     if is_valid_resonance(res_mol):
+        #         smi = Chem.MolToSmiles(
+        #             res_mol, canonical=True, isomericSmiles=keep_stereo
+        #         )
+        #         if smi not in seen_smiles:
+        #             seen_smiles.add(smi)
+        #             final_list.append(smi)
 
         return parent_smi, final_list, len(final_list)
 
@@ -185,31 +197,51 @@ def main():
 
     test_smis = test_df[["Molecule Name", "SMILES"]].drop_duplicates()
 
-    results = []
+    # Generate resonance structures for each pH used by endpoints.
+    # Protonating first ensures all resonance forms share the same ionization state,
+    # so deduplication collapses charge-placement variants that are equivalent at that pH.
+    for ph in [7.4, 6.5]:
+        results = []
+        ph_label = str(ph)
 
-    for row in tqdm(
-        test_smis.itertuples(index=False),
-        total=len(test_smis),
-        desc="Generating resonance structures",
-    ):
-        name = row[0]
-        smi = row[1]
+        for row in tqdm(
+            test_smis.itertuples(index=False),
+            total=len(test_smis),
+            desc=f"Generating resonance structures (pH {ph})",
+        ):
+            name = row[0]
+            smi = row[1]
 
-        parent, res_smis, n = generate_resonance_structure_smis_rdkit(smi)
+            prot_smi = protonate_at_ph([smi], ph)[0]
+            parent, res_smis, n = generate_resonance_structure_smis_rdkit(prot_smi)
 
-        results.append(
-            {
-                "molecule_name": name,
-                "parent_smi": parent,
-                "resonance_smis": json.dumps(res_smis),
-                "num_resonance": n,
-            }
-        )
+            # Re-protonate each resonance form at the same pH (mimics real pipeline:
+            # user submits SMILES → protonate → featurize → predict), then deduplicate.
+            res_smis_prot = protonate_at_ph(res_smis, ph)
+            seen = set()
+            deduped = []
+            for s in res_smis_prot:
+                canon = Chem.MolToSmiles(Chem.MolFromSmiles(s), canonical=True) if Chem.MolFromSmiles(s) else s
+                if canon not in seen:
+                    seen.add(canon)
+                    deduped.append(canon)
 
-    df_out = pd.DataFrame(results)
-    df_out.to_csv(output_path, index=False)
+            results.append(
+                {
+                    "molecule_name": name,
+                    "parent_smi": Chem.MolToSmiles(Chem.MolFromSmiles(smi), canonical=True),
+                    "resonance_smis": json.dumps(deduped),
+                    "num_resonance": len(deduped),
+                }
+            )
 
-    print(f"Saved resonance structures to {output_path}")
+        df_out = pd.DataFrame(results)
+        ph_path = processed_dir / f"resonance_structures_ph{ph_label}.csv"
+        df_out.to_csv(ph_path, index=False)
+        print(f"Saved resonance structures (pH {ph}) to {ph_path}")
+
+    # Use pH 7.4 output for visualisation (covers most endpoints)
+    df_out = pd.read_csv(processed_dir / "resonance_structures_ph7.4.csv")
 
     # -----------------------------
     # Visualize examples with high number of resonance forms

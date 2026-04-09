@@ -32,6 +32,11 @@ ENDPOINTS = [
     "MPPB", "MBPB", "MGMB",
 ]
 
+ENDPOINT_LABELS = {
+    "Caco-2 Permeability Papp A>B": "Caco-2 Papp A>B",
+    "Caco-2 Permeability Efflux":   "Caco-2 Efflux",
+}
+
 LOG_TRANSFORM_ENDPOINTS = [ep for ep in ENDPOINTS if ep.lower() != "logd"]
 
 ENDPOINT_PH = {ep: 7.4 for ep in ENDPOINTS}
@@ -121,18 +126,19 @@ def main(
     cluster_folds = pd.read_parquet(INTERIM_DATA_DIR / "cluster_cv_folds.parquet")
     cluster_folds = cluster_folds[cluster_folds["repeat"] == 0]
 
-    resonance_df = pd.read_csv(
-        PROCESSED_DATA_DIR / "2.14-zalte-resonance-generation" / "resonance_structures.csv"
-    )
+    res_dir = PROCESSED_DATA_DIR / "2.14-zalte-resonance-generation"
+    resonance_groups: dict[float, dict[str, list[str]]] = {}
+    for ph in [7.4, 6.5]:
+        rdf = pd.read_csv(res_dir / f"resonance_structures_ph{ph}.csv")
+        resonance_groups[ph] = {
+            canonicalize_smiles(row["parent_smi"]): [
+                canonicalize_smiles(s) for s in json.loads(row["resonance_smis"])
+            ]
+            for _, row in rdf.iterrows()
+        }
 
     name_to_orig_smi = dict(zip(df["Molecule Name"], df["SMILES"]))
     all_smiles = df["SMILES"].tolist()
-
-    resonance_groups = {}
-    for _, row in resonance_df.iterrows():
-        parent = canonicalize_smiles(row["parent_smi"])
-        res_list = [canonicalize_smiles(s) for s in json.loads(row["resonance_smis"])]
-        resonance_groups[parent] = res_list
 
     # -----------------------------
     # Fingerprint Similarity Analysis
@@ -141,7 +147,7 @@ def main(
     fp_sim_rows = []
     fp_dists_per_mol = {}
 
-    for parent, res_list in resonance_groups.items():
+    for parent, res_list in resonance_groups[7.4].items():
         if len(res_list) > 1:
             dists = compute_tanimoto_distances_within_group(res_list)
             if dists:
@@ -197,28 +203,34 @@ def main(
             train_smiles = protonate_at_ph(orig_smiles, ENDPOINT_PH[ep])
             X_fp = compute_bit_fp(train_smiles)
             X_desc = compute_rdkit_descriptors(train_smiles)
+            var_mask = X_desc.var(axis=0) > 0
+            X_desc = X_desc[:, var_mask]
 
             scaler = StandardScaler()
             X_desc = scaler.fit_transform(X_desc)
             X = np.hstack([X_fp, X_desc])
 
-            fold_map = dict(zip(cluster_folds["Molecule Name"], cluster_folds["fold"]))
+            # Use endpoint-specific fold assignments
+            ep_folds = cluster_folds[cluster_folds["endpoint"] == ep]
+            fold_map = dict(zip(ep_folds["Molecule Name"], ep_folds["fold"]))
             fold_ids = np.array([fold_map.get(n, -1) for n in names])
+            unique_folds = sorted(set(fold_ids[fold_ids >= 0]))
 
-            for fold in set(fold_ids):
-                if fold < 0: continue
-                tr, te = fold_ids != fold, fold_ids == fold
+            for fold_id in unique_folds:
+                te = fold_ids == fold_id
+                tr = (fold_ids >= 0) & ~te
 
                 cache_dir = INTERIM_DATA_DIR / "optuna_cache"
-                model, _, _ = tune_xgboost(X[tr], y[tr], cache_dir=cache_dir, cache_key=f"{ep}_cluster_fold{fold}")
+                model, _, _ = tune_xgboost(X[tr], y[tr], cache_dir=cache_dir, cache_key=f"{ep}_cluster_fold{fold_id}")
 
                 for name, smi_orig, true in zip(names[te], np.array(orig_smiles)[te], y[te]):
                     smi_canon = canonicalize_smiles(smi_orig)
-                    res_forms = resonance_groups.get(smi_canon, [smi_canon])
+                    res_forms = resonance_groups[ENDPOINT_PH[ep]].get(smi_canon, [smi_canon])
 
+                    res_desc = compute_rdkit_descriptors(res_forms)
                     Xr = np.hstack([
                         compute_bit_fp(res_forms),
-                        scaler.transform(compute_rdkit_descriptors(res_forms))
+                        scaler.transform(res_desc[:, var_mask])
                     ])
 
                     preds = model.predict(Xr)
@@ -232,89 +244,103 @@ def main(
             json.dump(oof_predictions, f, indent=4)
 
     # -----------------------------
-    # Metrics (Resonance + Random Baseline)
+    # RIGR-aligned metrics
+    # Methodology: Zalte et al. 2025 JCIM
+    #   RMS Resonance Range  = sqrt(mean((max_pred - min_pred)^2))
+    #   RMS MaxRD            = sqrt(mean(max_i|pred_i - true|^2))  [worst-case RMSE]
+    #   RMS MinRD            = sqrt(mean(min_i|pred_i - true|^2))  [best-case RMSE]
+    #   Baseline RMSE        = RMSE using canonical (index-0) prediction
+    #   % RMSE swing         = (MaxRD - MinRD) / Baseline * 100
     # -----------------------------
-    logger.info("Calculating metrics...")
-    rows = []
+    logger.info("Computing RIGR-aligned metrics...")
 
-    # 1. Resonance Metrics
-    for name, ep_dict in oof_predictions.items():
-        orig_smi = name_to_orig_smi.get(name)
-        smi_canon = canonicalize_smiles(orig_smi) if orig_smi else None
+    rigr_rows = []   # per-molecule (multi-form only), for distribution plots
+    ep_metrics = {}  # per-endpoint aggregated
 
-        for ep, d in ep_dict.items():
-            preds = np.array(d["preds"])
-            true = d["true"]
-
-            if len(preds) > 1:
-                maes = np.abs(preds - true)
-                pred_mean = np.mean(preds)
-                pred_std = np.std(preds)
-                pred_cv = pred_std / abs(pred_mean) if abs(pred_mean) > 1e-10 else np.nan
-
-                fp_stats = fp_dists_per_mol.get(smi_canon, {"max_dist": np.nan, "mean_dist": np.nan})
-
-                rows.append({
-                    "molecule_name": name,
-                    "endpoint": ep,
-                    "variant_type": "resonance",
-                    "resonance_range": preds.max() - preds.min(),
-                    "pred_cv": pred_cv,
-                    "max_mae": maes.max(),
-                    "min_mae": maes.min(),
-                    "num_resonance_forms": len(preds),
-                    "max_fp_dist": fp_stats["max_dist"],
-                    "mean_fp_dist": fp_stats["mean_dist"]
-                })
-
-    # 2. Random Pair Prediction Baseline
     for ep in ENDPOINTS:
-        # Get all molecules that have a prediction for this endpoint
-        ep_mols = [name for name in oof_predictions if ep in oof_predictions[name]]
-        if len(ep_mols) < 2: continue
+        mol_rows = []
+        for name, ep_dict in oof_predictions.items():
+            if ep not in ep_dict:
+                continue
+            preds = np.array(ep_dict[ep]["preds"])
+            true = ep_dict[ep]["true"]
+            maes = np.abs(preds - true)
 
-        n_random = min(1000, len(ep_mols))
-        for _ in range(n_random):
-            m1, m2 = rng.choice(ep_mols, 2, replace=False)
+            orig_smi = name_to_orig_smi.get(name)
+            smi_canon = canonicalize_smiles(orig_smi) if orig_smi else None
+            fp_stats = fp_dists_per_mol.get(smi_canon, {"max_dist": np.nan, "mean_dist": np.nan})
 
-            # Use the first resonance prediction to represent the base molecule's prediction
-            p1 = oof_predictions[m1][ep]["preds"][0]
-            p2 = oof_predictions[m2][ep]["preds"][0]
-
-            preds = np.array([p1, p2])
-            pred_mean = np.mean(preds)
-            pred_std = np.std(preds)
-            pred_cv = pred_std / abs(pred_mean) if abs(pred_mean) > 1e-10 else np.nan
-
-            rows.append({
-                "molecule_name": f"random_{m1}_{m2}",
-                "endpoint": ep,
-                "variant_type": "random",
-                "resonance_range": np.abs(p1 - p2),
-                "pred_cv": pred_cv,
-                "max_mae": np.nan,
-                "min_mae": np.nan,
-                "num_resonance_forms": 2,
-                "max_fp_dist": np.nan,
-                "mean_fp_dist": np.nan
+            mol_rows.append({
+                "baseline_err": float(abs(preds[0] - true)),
+                "max_rd":       float(maes.max()),
+                "min_rd":       float(maes.min()),
+                "res_range":    float(preds.max() - preds.min()) if len(preds) > 1 else 0.0,
+                "num_forms":    int(len(preds)),
             })
 
-    consistency_df = pd.DataFrame(rows)
+            if len(preds) > 1:
+                baseline_err = float(abs(preds[0] - true))
+                mol_pct = (float(maes.max()) - float(maes.min())) / (baseline_err + 1e-6) * 100
+                rigr_rows.append({
+                    "molecule_name":  name,
+                    "endpoint":       ep,
+                    "resonance_range": float(preds.max() - preds.min()),
+                    "max_rd":         float(maes.max()),
+                    "min_rd":         float(maes.min()),
+                    "baseline_err":   baseline_err,
+                    "num_forms":      int(len(preds)),
+                    "max_fp_dist":    fp_stats["max_dist"],
+                    "mol_pct_swing":  mol_pct,
+                })
+
+        if not mol_rows:
+            continue
+
+        n_total = len(mol_rows)
+        n_multi = sum(1 for r in mol_rows if r["num_forms"] > 1)
+
+        base_errs = np.array([r["baseline_err"] for r in mol_rows])
+        max_rds   = np.array([r["max_rd"]       for r in mol_rows])
+        min_rds   = np.array([r["min_rd"]        for r in mol_rows])
+        ranges    = np.array([r["res_range"] for r in mol_rows if r["num_forms"] > 1])
+
+        baseline_rmse = np.sqrt(np.mean(base_errs ** 2))
+        rms_maxrd     = np.sqrt(np.mean(max_rds ** 2))
+        rms_minrd     = np.sqrt(np.mean(min_rds ** 2))
+        rms_resrange  = float(np.sqrt(np.mean(ranges ** 2))) if len(ranges) > 0 else np.nan
+        pct_swing     = (rms_maxrd - rms_minrd) / baseline_rmse * 100
+        improve_pct   = (baseline_rmse - rms_minrd) / baseline_rmse * 100
+        worsen_pct    = (rms_maxrd - baseline_rmse) / baseline_rmse * 100
+
+        ep_metrics[ep] = {
+            "endpoint":      ep,
+            "n_total":       n_total,
+            "n_multi":       n_multi,
+            "coverage_pct":  round(n_multi / n_total * 100, 1),
+            "baseline_rmse": round(float(baseline_rmse), 4),
+            "rms_minrd":     round(float(rms_minrd),     4),
+            "rms_maxrd":     round(float(rms_maxrd),     4),
+            "rms_resrange":  round(float(rms_resrange),  4) if not np.isnan(rms_resrange) else np.nan,
+            "improve_pct":   round(float(improve_pct),   1),
+            "worsen_pct":    round(float(worsen_pct),    1),
+            "pct_swing":     round(float(pct_swing),     1),
+        }
+
+    consistency_df = pd.DataFrame(rigr_rows)
     consistency_df.to_csv(output_dir / "consistency_metrics.csv", index=False)
 
-    # Only summarize resonance for the heatmap
-    resonance_df = consistency_df[consistency_df["variant_type"] == "resonance"]
-    summary = resonance_df.groupby("endpoint")[
-        ["resonance_range", "pred_cv", "max_mae", "min_mae", "max_fp_dist"]
-    ].mean().reset_index()
+    summary = pd.DataFrame(list(ep_metrics.values())).sort_values("pct_swing", ascending=False)
     summary.to_csv(output_dir / "consistency_summary.csv", index=False)
+
+    # Endpoint order: sorted by total pct_swing descending (shared across all panels)
+    ep_order = summary["endpoint"].tolist()
 
     # -----------------------------
     # Plotting Suite
     # -----------------------------
     logger.info("Generating plots...")
 
-    # 1. Fingerprint Distances
+    # 1. Fingerprint Distances (resonance vs random pairs) — standalone figure
     fig, ax = plt.subplots(figsize=(8, 5))
     colors = {"resonance": "coral", "random": "gray"}
     for vtype in ["resonance", "random"]:
@@ -324,96 +350,126 @@ def main(
                     label=f"{vtype.capitalize()} (median={np.median(dists):.3f})")
     ax.set_xlabel("ECFP4 Tanimoto Distance")
     ax.set_ylabel("Density")
-    ax.set_title("Intra-group Fingerprint Distances (Resonance vs. Random)")
+    ax.set_title("Intra-group Fingerprint Distances (Resonance vs. Random Pairs)")
     ax.legend()
+    ax.grid(False)
     fig.savefig(output_dir / "fingerprint_distances.png", dpi=dpi, bbox_inches="tight")
     plt.close()
 
-    # 2. Prediction Consistency
-    active_endpoints = sorted(consistency_df["endpoint"].unique())
-    n_ep = len(active_endpoints)
-    nrows = (n_ep + 2) // 3
-    ncols = min(n_ep, 3)
+    # 2. Three-panel resonance sensitivity figure
+    import matplotlib.gridspec as gridspec
 
-    fig, axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 5 * nrows))
-    axes = np.atleast_2d(axes).ravel()
+    # Colors
+    COLOR_A       = "#2F7DBF"   # steel blue
+    COLOR_IMPROV  = "#2D7D3A"   # forest green
+    COLOR_WORSEN  = "#C0392B"   # crimson
+    COLOR_BOX     = "#E07B54"   # warm coral
+    COLOR_STRIP   = "#7B2D1E"   # dark rust
+    BAR_EDGE      = "black"
+    BAR_LW        = 0.6
 
-    for ax_idx, ep in enumerate(active_endpoints):
-        ax = axes[ax_idx]
-        ep_data = consistency_df[consistency_df["endpoint"] == ep].dropna(subset=["pred_cv"])
+    # Shortened display labels
+    disp = [ENDPOINT_LABELS.get(ep, ep) for ep in ep_order]
 
-        if len(ep_data) == 0:
-            ax.set_visible(False)
-            continue
+    fig = plt.figure(figsize=(16, 10))
+    gs = gridspec.GridSpec(2, 2, height_ratios=[1, 1.2], hspace=0.28, wspace=0.18)
 
-        # 1. Calculate n for labels (using FULL dataset)
-        res_mask = ep_data["variant_type"] == "resonance"
-        rand_mask = ep_data["variant_type"] == "random"
-        res_data = ep_data[res_mask]["pred_cv"].values
-        n_res = len(res_data)
-        n_rand = rand_mask.sum()
+    y_pos = np.arange(len(ep_order))
 
-        # 2. Subsample data for the DOTS ONLY to prevent the "wall of static"
-        # This randomly selects a maximum of 300 points per group for a clean visual
-        dot_data = pd.concat([
-            ep_data[res_mask].sample(min(n_res, 300), random_state=42),
-            ep_data[rand_mask].sample(min(n_rand, 300), random_state=42)
-        ])
+    # --- Panel A: Coverage (top-left) ---
+    ax_a = fig.add_subplot(gs[0, 0])
+    coverages = [ep_metrics[ep]["coverage_pct"] for ep in ep_order]
+    ax_a.barh(y_pos, coverages, color=COLOR_A, height=0.6,
+              edgecolor=BAR_EDGE, linewidth=BAR_LW)
+    for i, (ep, cov) in enumerate(zip(ep_order, coverages)):
+        n_m = ep_metrics[ep]["n_multi"]
+        n_t = ep_metrics[ep]["n_total"]
+        ax_a.text(cov + 0.8, i, f"{cov:.1f}%  ({n_m}/{n_t})", va="center", fontsize=10,
+                  color="dimgray", clip_on=False)
+    ax_a.set_yticks(y_pos)
+    ax_a.set_yticklabels(disp, fontsize=10)
+    ax_a.set_xlabel("Molecules with multiple resonance forms (%)", fontsize=10)
+    ax_a.set_xlim(0, max(coverages) * 1.35)  # headroom for labels
+    ax_a.set_title("A", fontsize=16, fontweight="bold", loc="left")
+    ax_a.invert_yaxis()
+    ax_a.grid(False)
+    for spine in ["top", "right"]:
+        ax_a.spines[spine].set_visible(False)
 
-        # 3. Zoom the camera to the 95th percentile of resonance (fixes the pancake effect)
-        if n_res > 0:
-            # 95th percentile * 2.5 gives perfect breathing room for the box
-            plot_ymax = np.percentile(res_data, 95) * 2.5
-        else:
-            plot_ymax = 1.0
+    # --- Panel B: Diverging improvement/worsening (top-right) ---
+    ax_b = fig.add_subplot(gs[0, 1])
+    improves_neg = [-ep_metrics[ep]["improve_pct"] for ep in ep_order]
+    worsens      = [ ep_metrics[ep]["worsen_pct"]  for ep in ep_order]
 
-        # 4. Draw Boxplot on the FULL data (showfliers=False hides extreme whiskers)
-        sns.boxplot(
-            data=ep_data, x="variant_type", y="pred_cv", ax=ax,
-            hue="variant_type", legend=False,
-            palette={"resonance": "coral", "random": "lightgray"},
-            width=0.4, showfliers=False, boxprops=dict(alpha=0.7)
-        )
+    ax_b.barh(y_pos, improves_neg, color=COLOR_IMPROV, height=0.6,
+              edgecolor=BAR_EDGE, linewidth=BAR_LW, label="Best case")
+    ax_b.barh(y_pos, worsens,      color=COLOR_WORSEN, height=0.6,
+              edgecolor=BAR_EDGE, linewidth=BAR_LW, label="Worst case")
 
-        # 5. Overlay dots using the SUBSAMPLED data (nice and clean!)
-        sns.stripplot(
-            data=dot_data, x="variant_type", y="pred_cv", ax=ax,
-            hue="variant_type", legend=False,
-            palette={"resonance": "darkred", "random": "dimgray"},
-            size=2.5, alpha=0.6, jitter=True, zorder=1
-        )
+    max_improve = max(abs(v) for v in improves_neg)
+    max_worsen  = max(worsens)
+    ax_b.set_xlim(-max_improve * 1.9, max_worsen * 1.35)
 
-        # Lock the y-limits to our zoomed range
-        ax.set_ylim(bottom=-0.05 * plot_ymax, top=plot_ymax)
+    for i, (imp, wor) in enumerate(zip(improves_neg, worsens)):
+        ax_b.text(imp - 0.2, i, f"{abs(imp):.1f}%", va="center", ha="right",
+                  fontsize=10, color=COLOR_IMPROV, clip_on=False)
+        ax_b.text(wor + 0.2, i, f"{wor:.1f}%", va="center", ha="left",
+                  fontsize=10, color=COLOR_WORSEN, clip_on=False)
 
-        # 6. Formatting
-        ax.set_title(ep, fontsize=12, fontweight="bold")
-        ax.set_xticks([0, 1])
-        ax.set_xticklabels([f"Resonance\n(n={n_res})", f"Random\n(n={n_rand})"], fontsize=10)
-        ax.set_xlabel("")
+    ax_b.axvline(0, color="black", linewidth=1.0)
+    ax_b.set_yticks(y_pos)
+    ax_b.set_yticklabels([""] * len(ep_order))
+    ax_b.set_xlabel("Overall RMSE change (% of baseline)", fontsize=10)
+    ax_b.set_title("B", fontsize=16, fontweight="bold", loc="left")
+    ax_b.legend(loc="lower right", fontsize=8, framealpha=0.95,
+                edgecolor="lightgray")
+    ax_b.invert_yaxis()
+    ax_b.grid(False)
+    for spine in ["top", "right"]:
+        ax_b.spines[spine].set_visible(False)
 
-        if ax_idx % ncols == 0:
-            ax.set_ylabel("Prediction CV (Spread / Mean)", fontsize=11)
-        else:
-            ax.set_ylabel("")
+    # --- Panel C: Per-molecule severity (bottom, full width) ---
+    ax_c = fig.add_subplot(gs[1, :])
 
-    # Hide unused axes
-    for ax_idx in range(n_ep, len(axes)):
-        axes[ax_idx].set_visible(False)
+    # Map endpoint names in df to display names for x-axis
+    plot_df = consistency_df.copy()
+    plot_df["endpoint_label"] = plot_df["endpoint"].map(lambda e: ENDPOINT_LABELS.get(e, e))
+    disp_order = [ENDPOINT_LABELS.get(ep, ep) for ep in ep_order]
 
-    fig.suptitle("Prediction CV Distributions: Resonance vs Random Baselines", fontsize=16, y=1.02, fontweight="bold")
-    fig.tight_layout()
-    fig.savefig(output_dir / "prediction_consistency.png", dpi=dpi, bbox_inches="tight")
-    plt.close()
+    sns.boxplot(
+        data=plot_df,
+        x="endpoint_label", y="mol_pct_swing",
+        order=disp_order,
+        color=COLOR_BOX, width=0.5, showfliers=False,
+        boxprops=dict(edgecolor=BAR_EDGE, linewidth=BAR_LW),
+        medianprops=dict(color=BAR_EDGE, linewidth=1.2),
+        whiskerprops=dict(color=BAR_EDGE, linewidth=BAR_LW),
+        capprops=dict(color=BAR_EDGE, linewidth=BAR_LW),
+        ax=ax_c,
+    )
+    strip_data = pd.concat([
+        g.sample(min(len(g), 200), random_state=42)
+        for _, g in plot_df.groupby("endpoint_label")
+    ], ignore_index=True)
+    sns.stripplot(
+        data=strip_data,
+        x="endpoint_label", y="mol_pct_swing",
+        order=disp_order,
+        color=COLOR_STRIP, size=2.5, alpha=0.5, jitter=True, ax=ax_c,
+    )
 
-    # 3. Consistency Heatmap (CV - Resonance Only)
-    fig, ax = plt.subplots(figsize=(4, 6))
-    heatmap_data = summary.set_index("endpoint")[["pred_cv"]]
-    sns.heatmap(heatmap_data, annot=True, fmt=".3f", cmap="YlOrRd", ax=ax, cbar_kws={"label": "Mean Prediction CV"})
-    ax.set_title("Mean Prediction CV\n(Resonance Forms)")
-    ax.set_ylabel("")
-    fig.tight_layout()
-    fig.savefig(output_dir / "consistency_heatmap.png", dpi=dpi, bbox_inches="tight")
+    p95 = consistency_df["mol_pct_swing"].quantile(0.95)
+    ax_c.set_ylim(bottom=-p95 * 0.04, top=p95 * 1.3)
+    ax_c.set_xlabel("")
+    ax_c.set_ylabel("Error range across resonance forms\n(% of baseline)", fontsize=10)
+    ax_c.set_title("C", fontsize=16, fontweight="bold", loc="left")
+    ax_c.set_xticklabels(disp_order, rotation=30, ha="right", fontsize=10)
+    ax_c.yaxis.grid(True, linestyle="--", linewidth=0.6, alpha=0.5, color="lightgray")
+    ax_c.set_axisbelow(True)
+    for spine in ["top", "right"]:
+        ax_c.spines[spine].set_visible(False)
+
+    fig.savefig(output_dir / "resonance_sensitivity_panel.png", dpi=dpi, bbox_inches="tight")
     plt.close()
 
     logger.info("Done.")
