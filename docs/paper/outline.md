@@ -95,7 +95,7 @@ This paper sits between a review and an opinion paper. Instead of prescriptive "
 - Lowest structural distances (0.245–0.286) but maximal target distribution shift (KS 0.956–0.988)
 - Tests whether models can extrapolate to value ranges not seen during training
 
-All strategies produced balanced fold sizes (max/min ratio < 1.12). Distance distributions illustrated for LogD as representative endpoint.
+All strategies produced balanced fold sizes (max/min ratio < 1.15). Distance distributions illustrated for LogD as representative endpoint.
 
 **Figures**: Figure 3 (test-to-train 1-NN distance distributions by strategy)
 
@@ -129,15 +129,15 @@ All strategies produced balanced fold sizes (max/min ratio < 1.12). Distance dis
 
 **Key findings**: Substantial OOD degradation across all endpoints:
 - R² goes negative OOD for 4 of 8 endpoints (MLM CLint −1.07, MBPB −0.48, Caco-2 Papp −0.09, Caco-2 Efflux −0.005)
-- Median squared error increases 1.0–7.4× (MLM CLint 7.4×, KSOL 6.8×, MPPB 5.9×, MBPB 5.6×, LogD 4.9×)
+- Median squared error increases 1.0–7.4× (MLM CLint 7.4×, KSOL 6.8×, MPPB 5.9×, MBPB 5.6×, LogD 4.8×)
 - HLM CLint shows negative R² on IID (−0.12) — clearance hard even within-series
 - Caco-2 Papp most robust (1.0× degradation) — consistent with performance-over-distance finding
-- LogD, despite best IID performance (R²=0.64), degrades 4.9× to R²=0.11 on OOD — within-series performance is fundamentally unreliable predictor of cross-series generalization
+- LogD, despite best IID performance (R²=0.64), degrades 4.8× to R²=0.11 on OOD — within-series performance is fundamentally unreliable predictor of cross-series generalization
 
 **Mechanistic interpretation**:
 - MLM CLint (7.4×): tuning may overfit to training series SAR patterns; CYP450 metabolic soft-spot accessibility is highly scaffold-dependent
 - KSOL (6.8×): solubility depends on crystal packing forces, highly scaffold-dependent
-- LogD (4.9×): ECFP4 representation changes between distant scaffolds even when global polarity conserved
+- LogD (4.8×): ECFP4 representation changes between distant scaffolds even when global polarity conserved
 
 **Figures**: Figure 5 (IID vs OOD squared error distributions), Table 3 (IID vs OOD metrics: R², Spearman, SE fold-change)
 
@@ -225,17 +225,14 @@ All strategies produced balanced fold sizes (max/min ratio < 1.12). Distance dis
 
 **Claim**: Activity cliffs — structurally similar molecules with unexpectedly large activity differences — violate the smoothness assumption underlying fingerprint-based models. This is a qualitatively distinct failure mode from extrapolation failure.
 
-**Definition**: Cliff pairs = Tanimoto similarity > 0.85 (ECFP4) + activity difference in top quartile among all such similar pairs for a given endpoint. Activity differences computed in log₁₀(x+1) space (matching target transform). Any molecule in ≥1 cliff pair labeled a cliff molecule.
+**Definition**: Cliff pairs = Tanimoto similarity > 0.85 (ECFP4) + absolute activity difference ≥ 1.0 log units (≈ 10-fold change in raw measurement). Activity differences computed in log₁₀(x+1) space (matching target transform); for LogD, computed in raw units. Any molecule in ≥1 cliff pair labeled a cliff molecule.
 
 **Key findings** (Optuna TPE-tuned XGBoost, cluster-split CV, 5 folds):
-- Cliff molecules comprise 6–10% of molecules per endpoint
-- Cliff RAE exceeds non-cliff RAE for 7 of 9 endpoints:
-  - Worst: HLM CLint cliff RAE = 0.861 vs non-cliff 0.807; Caco-2 Efflux cliff RAE = 0.827 vs non-cliff 0.606
-  - R² drops to 0.273 for MPPB cliffs (vs 0.591 non-cliff)
-  - Spearman ρ consistently lower on cliffs across all 9 endpoints
-- **Two exceptions**: MLM CLint (cliff RAE 0.678 vs non-cliff 0.700) and MBPB (cliff 0.492 vs non-cliff 0.571)
-  - MLM CLint: cliff pairs may have large value ranges that align with XGBoost's tree-splitting decisions
-  - MBPB: small number of cliff pairs (47 pairs, 86 molecules) limits statistical power
+- Cliff molecules comprise 0–4.6% of molecules per endpoint (absolute threshold ≥ 1.0 log units)
+- Cliff RAE exceeds non-cliff RAE for all 7 endpoints with sufficient cliff populations:
+  - Worst: Caco-2 Efflux cliff RAE = 0.95 vs non-cliff 0.58; Caco-2 Papp cliff RAE = 0.91 vs non-cliff 0.64
+  - HLM CLint cliff RAE = 0.87 vs non-cliff 0.81
+- MBPB (0 cliffs) and MPPB (4 cliffs) had insufficient cliff molecules for evaluation
 - Endpoints may be particularly cliff-prone when governed by specific structural motifs (CYP450 recognition, P-gp substrate features)
 
 **Figures**: Figure S4 (squared error distributions), Table S4 (cliff prevalence and performance) — supplementary
@@ -258,24 +255,25 @@ All strategies produced balanced fold sizes (max/min ratio < 1.12). Distance dis
 - Consistency ratios > 1 across most endpoints (up to 3.4× for KSOL, 2.0× for Caco-2 Papp A>B) — model *amplifies* substituent effects beyond true biological variation
 - Amplification mechanism: single atom change in decoration modifies all circular substructures including that atom, flipping dozens of ECFP4 bits
 
-**Resonance form analysis** (Optuna TPE-tuned XGBoost, cluster-split CV, 5 folds):
-- 7,017 molecules (92.2%) have >1 tautomeric/resonance form (median 4, max 9)
-- Resonance forms — chemically identical molecules — have median ECFP4 Tanimoto distance of 0.494 (cf. scaffold decorations 0.349, stereoisomers 0.067, random pairs 0.849)
-- Prediction CV 0.05–0.96 (median) across endpoints; LogD most unstable (0.962) due to values spanning zero amplifying the CV denominator
-- Most endpoints show resonance CV *lower* than random-pair CV (model recognizes partial similarity), but LogD (0.96 vs 0.23) and Caco-2 Papp (0.22 vs 0.19) show resonance exceeding random
-- Tautomeric rearrangements alter bond orders, aromaticity flags, and hydrogen positions — fundamentally changing the molecular graph that Morgan fingerprints encode
-- Highlights a representation-level vulnerability: canonicalization choices (which tautomer to featurize) can shift predictions substantially
+**Resonance form analysis** (Optuna TPE-tuned XGBoost, cluster-split CV, 5 folds; RIGR framework, Zalte et al. 2025 JCIM):
+- Protonate-enumerate-reprotonate-deduplicate pipeline at endpoint-specific pH (7.4 or 6.5) ensures fair evaluation matching training preprocessing
+- **pH-dependent prevalence**: 20-53% of molecules have >1 distinct form at pH 7.4; only 1.8% at pH 6.5 (Caco-2) — protonation at lower pH collapses resonance variants
+- Resonance forms have median ECFP4 Tanimoto distance of 0.462 (cf. scaffold decorations 0.349, stereoisomers 0.067, random pairs 0.849) — larger shifts than different substituents despite chemical identity
+- **RMSE swing up to 27%** (LogD): worst-case form increases RMSE by 20%, best-case reduces by 7.0%. Worsening meets or exceeds improvement across all 9 endpoints
+- Endpoint-specific: LogD most affected (electronic distribution), clearance moderate (CYP450 soft spots), Caco-2 least affected (global properties + pH 6.5 collapse)
+- **Per-molecule risk**: individual molecules can experience prediction error ranges of several hundred percent — practitioner receives no signal of instability
+- Bond order changes, aromaticity flag shifts, and formal charge differences alter the molecular graph that Morgan fingerprints encode — a representation-level vulnerability distinct from extrapolation or interpolation failures
 
 **Practical caveat**: Many public/pharma datasets contain unreliable stereochemistry annotations (racemic synthesis, incomplete chiral separation). Chirality-aware modeling can be counterproductive by fitting noise.
 
-**Figures**: Figure 6 (fingerprint distances), Table 4 (prediction consistency), Figures S5–S6 (prediction CV, spread scatter), Figures S7–S8 (resonance fingerprint distances, resonance prediction consistency) — supplementary
+**Figures**: Figure 6 (fingerprint distances), Table 4 (prediction consistency), Figures S5–S6 (prediction CV, spread scatter), Figure 7 (resonance sensitivity panel — main text), Figure S8 (resonance fingerprint distances — supplementary)
 
 ## Discussions
 
 ### Summary of four failure modes
 - **Extrapolation failure** (IID vs OOD): 1.0–7.4× worse performance across chemical series boundaries, R² negative for 4 of 8 endpoints on OOD — models trained on one series fail silently on a new series
-- **Interpolation failure** (activity cliffs): 6–10% of molecules show systematically higher error for 7 of 9 endpoints, cliff RAE up to 0.861 for HLM CLint — smoothness assumption violated
-- **Representation failure** (molecular variants): chirality-aware ECFP4 partially resolves stereoisomer blindness but still under-predicts true biological variation (15% of dataset); scaffold decorations amplified beyond true biological variation (up to 3.4× for KSOL); resonance form enumeration reveals fingerprint instability (median Tanimoto 0.494 between chemically identical molecules, prediction CV 0.05–0.96)
+- **Interpolation failure** (activity cliffs): 0–4.6% of molecules (absolute ≥ 1.0 log units) show systematically higher error for all 7 endpoints with sufficient cliff populations
+- **Representation failure** (molecular variants): chirality-aware ECFP4 partially resolves stereoisomer blindness but still under-predicts true biological variation (15% of dataset); scaffold decorations amplified beyond true biological variation (up to 3.4× for KSOL); resonance form ambiguity causes up to 27% RMSE swing (LogD) with worsening meeting or exceeding improvement — a representation-level vulnerability where chemically identical molecules occupy distant fingerprint regions (median Tanimoto 0.46)
 - **Evaluation failure** (scaffold ≈ random; split variance): random CV gives precise estimates of the wrong thing; scaffold splits are indistinguishable from random (MA-RAE 0.510 vs 0.474); single cluster-split R² spans 0.30–0.58 for MGMB
 - The framework connects evaluation choices to deployment scenarios (hit identification vs. lead optimization)
 - The Expansion Tx dataset uniquely enables these analyses due to its real-world provenance (ordinal ordering, chemical series, multi-endpoint coverage)
@@ -363,8 +361,9 @@ All strategies produced balanced fold sizes (max/min ratio < 1.12). Distance dis
 | Fig S4 | Activity cliff squared error distributions | NB 2.10 | `squared_error_distributions.png` |
 | Fig S5 | Prediction CV by variant type | NB 2.13 | `prediction_consistency.png` |
 | Fig S6 | Predicted vs true range scatter by variant type | NB 2.13 | `spread_scatter.png` |
-| Fig S7 | Resonance form fingerprint distance distributions | NB 2.15 | `fingerprint_distances.png` |
-| Fig S8 | Resonance form prediction consistency | NB 2.15 | `prediction_consistency.png` |
+| Fig 7 | Resonance sensitivity panel (prevalence, improve/worsen, per-molecule error) | NB 2.15 | `resonance_sensitivity_panel.png` |
+| Fig S7 | Activity concordance by scaffold membership | NB 2.16 | `activity_concordance.png` |
+| Fig S8 | Resonance form fingerprint distance distributions | NB 2.15 | `fingerprint_distances.png` |
 
 ## Key References
 
@@ -388,3 +387,4 @@ All strategies produced balanced fold sizes (max/min ratio < 1.12). Distance dis
 18. Bemis, G. W. & Murcko, M. A. The properties of known drugs. 1. Molecular frameworks. *J. Med. Chem.* **39**, 2887–2893 (1996).
 19. Ash, J. R., Wognum, C., et al. Practically Significant Method Comparison Protocols for Machine Learning in Small Molecule Drug Discovery. *J. Chem. Inf. Model.* **65**, (18) (2025). DOI: 10.1021/acs.jcim.5c01609.
 20. Rogers, D. & Hahn, M. Extended-Connectivity Fingerprints. *J. Chem. Inf. Model.* **50**, 742–751 (2010).
+21. Zalte, A. et al. RIGR: Representation Instability in Generalization and Robustness. *J. Chem. Inf. Model.* (2025).
