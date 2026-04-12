@@ -127,7 +127,7 @@ def identify_cliffs(
     dist_sub: np.ndarray,
     values: np.ndarray,
     sim_threshold: float = 0.85,
-    diff_quantile: float = 0.75,
+    min_diff: float = 2.0,
 ) -> tuple[set[int], list[tuple[int, int, float, float]], float]:
     """Identify activity cliff molecules.
 
@@ -136,13 +136,14 @@ def identify_cliffs(
         values: Activity values (log-transformed if applicable).
         sim_threshold: Minimum Tanimoto similarity for a pair to be considered
             structurally similar (distance < 1 - sim_threshold).
-        diff_quantile: Quantile of activity differences among similar pairs
-            to define the cliff threshold.
+        min_diff: Absolute activity difference threshold to define a cliff.
+            For log-transformed endpoints this is in log10(x+1) space;
+            for LogD this is in raw units.
 
     Returns:
         cliff_indices: Set of local indices that participate in at least one cliff.
         cliff_pairs: List of (i, j, similarity, activity_diff) tuples.
-        diff_threshold: The activity difference threshold used.
+        diff_threshold: The activity difference threshold used (= min_diff).
     """
     dist_cutoff = 1.0 - sim_threshold
     n = len(values)
@@ -159,8 +160,7 @@ def identify_cliffs(
     if not similar_pairs:
         return set(), [], 0.0
 
-    diffs = np.array([p[3] for p in similar_pairs])
-    diff_threshold = np.quantile(diffs, diff_quantile)
+    diff_threshold = min_diff
 
     cliff_pairs = [(i, j, sim, d) for i, j, sim, d in similar_pairs if d >= diff_threshold]
     cliff_indices = set()
@@ -178,7 +178,7 @@ def main(
     ),
     dpi: int = typer.Option(DEFAULT_DPI, help="DPI for saved figures"),
     sim_threshold: float = typer.Option(0.85, help="Tanimoto similarity threshold for similar pairs"),
-    diff_quantile: float = typer.Option(0.75, help="Activity difference quantile for cliff definition"),
+    min_diff: float = typer.Option(1.0, help="Absolute activity difference threshold for cliff definition"),
 ) -> None:
     set_style()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -223,7 +223,7 @@ def main(
             values = raw_values
 
         cliff_indices, cliff_pairs, diff_threshold = identify_cliffs(
-            D_sub, values, sim_threshold, diff_quantile
+            D_sub, values, sim_threshold, min_diff
         )
 
         cliff_name_set = {names[i] for i in cliff_indices}

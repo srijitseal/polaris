@@ -256,6 +256,40 @@ def main(
             f"median={np.median(sizes):.0f}, mean={np.mean(sizes):.1f}"
         )
 
+    # ── 2b. Stereoisomer activity differences (assay noise baseline) ──
+    logger.info("Computing within-stereoisomer-group activity differences")
+    stereo_activity_rows = []
+    for ep in ENDPOINTS:
+        ep_diffs = []
+        groups_with_data = 0
+        for _key, indices in stereo_groups.items():
+            vals = df.iloc[indices][ep].dropna().values
+            if len(vals) >= 2:
+                groups_with_data += 1
+                for i in range(len(vals)):
+                    for j in range(i + 1, len(vals)):
+                        ep_diffs.append(abs(vals[i] - vals[j]))
+        if ep_diffs:
+            arr = np.array(ep_diffs)
+            stereo_activity_rows.append({
+                "endpoint": ep,
+                "n_groups": groups_with_data,
+                "n_pairs": len(arr),
+                "mean_abs_diff": arr.mean(),
+                "median_abs_diff": np.median(arr),
+                "max_abs_diff": arr.max(),
+                "pct_gt_0.1": 100 * (arr > 0.1).mean(),
+                "pct_gt_0.5": 100 * (arr > 0.5).mean(),
+                "pct_gt_1.0": 100 * (arr > 1.0).mean(),
+            })
+            logger.info(
+                f"  {ep}: {groups_with_data} groups, {len(arr)} pairs, "
+                f"median |Δ|={np.median(arr):.4f}, mean |Δ|={arr.mean():.4f}"
+            )
+    stereo_activity_df = pd.DataFrame(stereo_activity_rows)
+    stereo_activity_df.to_csv(output_dir / "stereoisomer_activity_diffs.csv", index=False)
+    logger.info("Saved stereoisomer_activity_diffs.csv")
+
     # ── 3. Fingerprint similarity within groups ───────────────────────
     logger.info("Computing intra-group Tanimoto distances")
     fp_sim_rows = []

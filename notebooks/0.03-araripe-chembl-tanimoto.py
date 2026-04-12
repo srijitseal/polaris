@@ -157,16 +157,86 @@ def compute_max_tanimoto(query_fps: list, ref_fps: list, label: str = "") -> np.
     return max_sims
 
 
+def plot_comparison_publication(
+    max_sim_all: np.ndarray,
+    max_sim_adme: np.ndarray,
+    n_all: int,
+    n_adme: int,
+    output_dir: Path,
+    dpi: int,
+) -> None:
+    """Publication-quality comparison figure (no title, relative frequency, large fonts)."""
+    plt.rcParams.update({
+        "font.size": 16,
+        "axes.labelsize": 18,
+        "xtick.labelsize": 14,
+        "ytick.labelsize": 14,
+        "legend.fontsize": 14,
+    })
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    bins = np.linspace(0, 1, 51)
+
+    # Relative frequency (weights-based)
+    weights_all = np.ones_like(max_sim_all) / len(max_sim_all)
+    weights_adme = np.ones_like(max_sim_adme) / len(max_sim_adme)
+
+    ax.hist(max_sim_all, bins=bins, weights=weights_all, alpha=0.6,
+            color="steelblue", label=f"All ChEMBL 36 (n={n_all:,})", edgecolor="white")
+    ax.hist(max_sim_adme, bins=bins, weights=weights_adme, alpha=0.6,
+            color="coral", label=f"ADME subset (n={n_adme:,})", edgecolor="white")
+
+    ax.set_xlabel("Maximum Tanimoto similarity")
+    ax.set_ylabel("Relative frequency")
+
+    # Median lines with legend entries
+    med_all = np.median(max_sim_all)
+    med_adme = np.median(max_sim_adme)
+    ax.axvline(med_all, color="steelblue", linestyle="--", linewidth=1.5, alpha=0.8,
+               label=f"Median = {med_all:.2f}")
+    ax.axvline(med_adme, color="coral", linestyle="--", linewidth=1.5, alpha=0.8,
+               label=f"Median = {med_adme:.2f}")
+
+    # Activity-relevant threshold
+    ax.axvline(0.7, color="gray", linestyle=":", linewidth=1.5, alpha=0.7,
+               label="Activity-relevant threshold (0.7)")
+
+    ax.legend(loc="upper left")
+    ax.set_xlim(0, 1)
+
+    fig.tight_layout()
+    fig.savefig(output_dir / "max_tanimoto_comparison_v2.png", dpi=dpi, bbox_inches="tight",
+                facecolor="white", edgecolor="none")
+    logger.info("Saved max_tanimoto_comparison_v2.png")
+    plt.close("all")
+
+
 @app.command()
 def main(
     output_dir: Path = typer.Option(
         PROCESSED_DATA_DIR / "0.03-araripe-chembl-tanimoto", help="Output directory"
     ),
     dpi: int = typer.Option(DEFAULT_DPI, help="DPI for saved figures"),
+    figures_only: bool = typer.Option(False, help="Regenerate figures from precomputed data"),
 ) -> None:
     set_style()
     output_dir.mkdir(parents=True, exist_ok=True)
     INTERIM_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    # ── Figures-only mode: load precomputed similarities ──────────────
+    if figures_only:
+        sim_path = output_dir / "max_similarities.npz"
+        if not sim_path.exists():
+            logger.error(f"Cannot find {sim_path}. Run without --figures-only first.")
+            raise typer.Exit(1)
+        data = np.load(sim_path)
+        max_sim_all = data["max_sim_all"]
+        max_sim_adme = data["max_sim_adme"]
+        n_all = int(data["n_all"])
+        n_adme = int(data["n_adme"])
+        logger.info(f"Loaded precomputed similarities from {sim_path}")
+        plot_comparison_publication(max_sim_all, max_sim_adme, n_all, n_adme, output_dir, dpi)
+        return
 
     # ── 1. Load ExpansionRX data and compute fingerprints ─────────────
     logger.info("Loading ExpansionRX datasets")
@@ -249,7 +319,20 @@ def main(
     logger.info("Saved max_tanimoto_comparison.png")
     plt.close("all")
 
-    # ── 6. Summary statistics ─────────────────────────────────────────
+    # ── 6. Save similarities for figures-only mode ──────────────────────
+    np.savez_compressed(
+        output_dir / "max_similarities.npz",
+        max_sim_all=max_sim_all,
+        max_sim_adme=max_sim_adme,
+        n_all=len(all_chembl_fps),
+        n_adme=len(adme_chembl_fps),
+    )
+    logger.info("Saved max_similarities.npz for --figures-only mode")
+
+    # ── 7. Publication-quality comparison figure ───────────────────────
+    plot_comparison_publication(max_sim_all, max_sim_adme, len(all_chembl_fps), len(adme_chembl_fps), output_dir, dpi)
+
+    # ── 8. Summary statistics ─────────────────────────────────────────
     stats = []
     for label, vals in [("all_chembl", max_sim_all), ("adme_subset", max_sim_adme)]:
         stats.append({
