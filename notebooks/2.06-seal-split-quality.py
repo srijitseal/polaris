@@ -49,6 +49,36 @@ def get_train_test_masks(fold_ids: np.ndarray, fold_id: int, strategy: str) -> t
     return train_mask, test_mask
 
 
+def plot_distance_distributions(strategy_nn1: dict, colors: dict, output_dir: Path, dpi: int) -> None:
+    """Plot pooled test-to-train 1-NN distance distributions by strategy."""
+    strategy_labels = {"cluster": "Cluster-based", "time": "Time-based", "target": "Target-value"}
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    bins = np.linspace(0, 1, 51)
+
+    # Plot from narrowest to widest for visual clarity
+    for strat_name in ["target", "time", "cluster"]:
+        nn1 = strategy_nn1[strat_name]
+        weights = np.ones_like(nn1) / len(nn1)
+        ax.hist(nn1, bins=bins, weights=weights, histtype="stepfilled", alpha=0.35,
+                color=colors[strat_name], edgecolor=colors[strat_name], linewidth=1.2,
+                label=strategy_labels[strat_name])
+
+    # Vertical median lines
+    for strat_name in ["target", "time", "cluster"]:
+        med = np.median(strategy_nn1[strat_name])
+        ax.axvline(med, color=colors[strat_name], linestyle="--", linewidth=1.5, alpha=0.9)
+
+    ax.set_xlabel("Test-to-train 1-NN Jaccard distance")
+    ax.set_ylabel("Relative frequency")
+    ax.set_xlim(0, 1)
+    ax.legend(frameon=True)
+
+    fig.tight_layout()
+    fig.savefig(output_dir / "distance_distributions_by_strategy.png", dpi=dpi, bbox_inches="tight")
+    logger.info("Saved distance_distributions_by_strategy.png")
+    plt.close("all")
+
+
 @app.command()
 def main(
     output_dir: Path = typer.Option(
@@ -56,9 +86,21 @@ def main(
     ),
     dpi: int = typer.Option(DEFAULT_DPI, help="DPI for saved figures"),
     overlap_threshold: float = typer.Option(0.1, help="1-NN distance threshold for structural overlap"),
+    figures_only: bool = typer.Option(False, help="Regenerate figures from existing data without rerunning analysis"),
 ) -> None:
     set_style()
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    colors = {"cluster": "steelblue", "time": "coral", "target": "forestgreen"}
+
+    # ── Figures-only mode ─────────────────────────────────────────────
+    if figures_only:
+        logger.info("Figures-only mode: loading existing data")
+        nn1_data = np.load(output_dir / "strategy_nn1.npz")
+        strategy_nn1 = {k: nn1_data[k] for k in nn1_data}
+        plot_distance_distributions(strategy_nn1, colors, output_dir, dpi)
+        logger.info("Figures regenerated (no data recomputed)")
+        return
 
     # ── 1. Load data ──────────────────────────────────────────────────
     logger.info("Loading data")
@@ -99,7 +141,6 @@ def main(
     # ── 2. Check 1: Fold sizes ────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(12, 5))
     x_offset = 0
-    colors = {"cluster": "steelblue", "time": "coral", "target": "forestgreen"}
     tick_positions = []
     tick_labels = []
 
@@ -161,13 +202,13 @@ def main(
     plt.close("all")
 
     # ── 4. Check 3: Test-to-train 1-NN distances ─────────────────────
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
     summary_rows = []
+    strategy_nn1 = {}
 
-    for ax, (strat_name, strat) in zip(axes, strategies.items()):
+    for strat_name, strat in strategies.items():
         fold_ids = strat["fold_ids"]
         n_folds = strat["n_folds"]
-        fold_colors = plt.cm.Set2(np.linspace(0, 1, n_folds))
+        fold_nn1s = []
 
         for fold_id in range(n_folds):
             train_mask, test_mask = get_train_test_masks(fold_ids, fold_id, strat_name)
@@ -195,19 +236,17 @@ def main(
                 "ks_pvalue": float(ks_p),
             })
 
-            ax.hist(nn1, bins=50, density=True, alpha=0.5, color=fold_colors[fold_id],
-                    label=f"F{fold_id} (med={med:.3f})", edgecolor="white")
+            fold_nn1s.append(nn1)
 
-        ax.set_xlabel("Test-to-train 1-NN distance")
-        ax.set_ylabel("Density")
-        ax.set_title(f"{strat_name.capitalize()}-split")
-        ax.legend(fontsize=7)
+        strategy_nn1[strat_name] = np.concatenate(fold_nn1s)
 
-    fig.suptitle(f"Test-to-train 1-NN distances ({ENDPOINT})", fontsize=14, y=1.02)
-    fig.tight_layout()
-    fig.savefig(output_dir / "distance_distributions_by_strategy.png", dpi=dpi, bbox_inches="tight")
-    logger.info("Saved distance_distributions_by_strategy.png")
-    plt.close("all")
+    # Save pooled distances for figures-only mode
+    np.savez(output_dir / "strategy_nn1.npz",
+             cluster=strategy_nn1["cluster"],
+             time=strategy_nn1["time"],
+             target=strategy_nn1["target"])
+
+    plot_distance_distributions(strategy_nn1, colors, output_dir, dpi)
 
     # ── 5. Check 4: Structural overlap ────────────────────────────────
     summary_df = pd.DataFrame(summary_rows)

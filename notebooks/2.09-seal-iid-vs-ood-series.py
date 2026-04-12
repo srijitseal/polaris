@@ -123,6 +123,72 @@ def compute_features(smiles_list: list[str]) -> tuple[np.ndarray, np.ndarray]:
     return ecfp, desc
 
 
+def plot_squared_error_distributions(errors_df: pd.DataFrame, metrics_df: pd.DataFrame,
+                                     output_dir: Path, dpi: int) -> None:
+    """Plot IID vs OOD squared error as paired box plots per endpoint."""
+    active_endpoints = sorted(errors_df["endpoint"].unique())
+    n_ep = len(active_endpoints)
+
+    plt.rcParams.update({"font.size": 16, "axes.labelsize": 18, "axes.titlesize": 16,
+                         "xtick.labelsize": 13, "ytick.labelsize": 13, "legend.fontsize": 14})
+
+    fig, ax = plt.subplots(figsize=(max(12, n_ep * 2), 6))
+
+    positions_iid = []
+    positions_ood = []
+    data_iid = []
+    data_ood = []
+    x_ticks = []
+    x_labels = []
+
+    for i, ep in enumerate(active_endpoints):
+        iid_se = errors_df[(errors_df["endpoint"] == ep) & (errors_df["set"] == "iid")]["squared_error"].values
+        ood_se = errors_df[(errors_df["endpoint"] == ep) & (errors_df["set"] == "ood")]["squared_error"].values
+
+        pos_iid = i * 3
+        pos_ood = i * 3 + 1
+        positions_iid.append(pos_iid)
+        positions_ood.append(pos_ood)
+        data_iid.append(iid_se)
+        data_ood.append(ood_se)
+        x_ticks.append(i * 3 + 0.5)
+        x_labels.append(ep)
+
+        # Annotate fold-change
+        fold = np.median(ood_se) / np.median(iid_se) if np.median(iid_se) > 0 else np.nan
+        y_top = max(np.percentile(iid_se, 95), np.percentile(ood_se, 95))
+        ax.text(i * 3 + 0.5, y_top * 1.5, f"{fold:.1f}×", ha="center", va="bottom",
+                fontsize=12, fontweight="bold", color="black")
+
+    bp_iid = ax.boxplot(data_iid, positions=positions_iid, widths=0.7, patch_artist=True,
+                        showfliers=False, medianprops={"color": "white", "linewidth": 2})
+    bp_ood = ax.boxplot(data_ood, positions=positions_ood, widths=0.7, patch_artist=True,
+                        showfliers=False, medianprops={"color": "white", "linewidth": 2})
+
+    for patch in bp_iid["boxes"]:
+        patch.set_facecolor("steelblue")
+        patch.set_alpha(0.7)
+    for patch in bp_ood["boxes"]:
+        patch.set_facecolor("coral")
+        patch.set_alpha(0.7)
+
+    ax.set_yscale("log")
+    ax.set_ylabel("Squared error")
+    ax.set_xticks(x_ticks)
+    ax.set_xticklabels(x_labels, rotation=35, ha="right")
+
+    # Legend
+    from matplotlib.patches import Patch
+    ax.legend(handles=[Patch(facecolor="steelblue", alpha=0.7, label="IID (within-series)"),
+                       Patch(facecolor="coral", alpha=0.7, label="OOD (cross-series)")],
+              loc="lower left")
+
+    fig.tight_layout()
+    fig.savefig(output_dir / "squared_error_distributions_v2.png", dpi=dpi, bbox_inches="tight")
+    logger.info("Saved squared_error_distributions_v2.png")
+    plt.close("all")
+
+
 @app.command()
 def main(
     output_dir: Path = typer.Option(
@@ -130,9 +196,19 @@ def main(
     ),
     dpi: int = typer.Option(DEFAULT_DPI, help="DPI for saved figures"),
     train_frac: float = typer.Option(0.8, help="Fraction of largest cluster for training (rest = IID val)"),
+    figures_only: bool = typer.Option(False, help="Regenerate figures from existing data without retraining"),
 ) -> None:
     set_style()
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── Figures-only mode ─────────────────────────────────────────────
+    if figures_only:
+        logger.info("Figures-only mode: loading existing data")
+        errors_df = pd.read_csv(output_dir / "iid_vs_ood_errors.csv")
+        metrics_df = pd.read_csv(output_dir / "summary_metrics.csv")
+        plot_squared_error_distributions(errors_df, metrics_df, output_dir, dpi)
+        logger.info("Figures regenerated (no models retrained)")
+        return
 
     # ── 1. Load data ──────────────────────────────────────────────────
     logger.info("Loading canonical dataset")

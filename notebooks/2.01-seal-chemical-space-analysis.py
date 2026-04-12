@@ -52,6 +52,31 @@ def butina_cluster(dist_square: np.ndarray, cutoff: float = 0.7) -> list[tuple]:
     return clusters
 
 
+def plot_figures(sizes: list[int], output_dir: Path, dpi: int) -> None:
+    """Generate figures from precomputed cluster sizes."""
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Left: bar chart of top 20 clusters (1-indexed rank)
+    top_n = min(20, len(sizes))
+    ranks = np.arange(1, top_n + 1)
+    axes[0].bar(ranks, sizes[:top_n], color="steelblue", edgecolor="white")
+    axes[0].set_xlabel("Cluster rank")
+    axes[0].set_ylabel("Cluster size")
+    axes[0].set_xticks(ranks)
+    axes[0].set_xticklabels([str(r) for r in ranks])
+
+    # Right: histogram of all cluster sizes (log scale)
+    axes[1].hist(sizes, bins=50, color="steelblue", edgecolor="white", alpha=0.8)
+    axes[1].set_xlabel("Cluster size")
+    axes[1].set_ylabel("Count")
+    axes[1].set_yscale("log")
+
+    fig.tight_layout()
+    fig.savefig(output_dir / "cluster_size_distribution.png", dpi=dpi, bbox_inches="tight")
+    logger.info("Saved cluster_size_distribution.png")
+    plt.close("all")
+
+
 @app.command()
 def main(
     output_dir: Path = typer.Option(
@@ -61,9 +86,19 @@ def main(
     cutoff: float = typer.Option(0.7, help="Butina distance cutoff"),
     n_top_clusters: int = typer.Option(5, help="Number of top clusters to visualize"),
     mols_per_cluster: int = typer.Option(6, help="Molecules to show per cluster"),
+    figures_only: bool = typer.Option(False, help="Regenerate figures from existing data without rerunning analysis"),
 ) -> None:
     set_style()
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── Figures-only mode: reload from CSV and replot ─────────────────
+    if figures_only:
+        logger.info("Figures-only mode: loading existing cluster_stats.csv")
+        stats_df = pd.read_csv(output_dir / "cluster_stats.csv")
+        sizes = stats_df["size"].tolist()
+        plot_figures(sizes, output_dir, dpi)
+        logger.info("Figures regenerated (no data recomputed)")
+        return
 
     # ── 1. Load data ──────────────────────────────────────────────────
     logger.info("Loading canonical dataset")
@@ -108,26 +143,7 @@ def main(
     logger.info(f"Median cluster size: {np.median(sizes):.0f}")
 
     # ── 4. Cluster size distribution ──────────────────────────────────
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-
-    # Left: bar chart of top 20 clusters
-    top_n = min(20, len(sizes))
-    axes[0].bar(range(top_n), sizes[:top_n], color="steelblue", edgecolor="white")
-    axes[0].set_xlabel("Cluster rank")
-    axes[0].set_ylabel("Cluster size")
-    axes[0].set_title(f"Top {top_n} clusters (of {len(clusters)} total)")
-
-    # Right: histogram of all cluster sizes (log scale)
-    axes[1].hist(sizes, bins=50, color="steelblue", edgecolor="white", alpha=0.8)
-    axes[1].set_xlabel("Cluster size")
-    axes[1].set_ylabel("Count")
-    axes[1].set_yscale("log")
-    axes[1].set_title(f"Cluster size distribution\n{n_singletons} singletons, cutoff={cutoff}")
-
-    fig.tight_layout()
-    fig.savefig(output_dir / "cluster_size_distribution.png", dpi=dpi, bbox_inches="tight")
-    logger.info("Saved cluster_size_distribution.png")
-    plt.close("all")
+    plot_figures(sizes, output_dir, dpi)
 
     # ── 5. Visualize top clusters ─────────────────────────────────────
     rng = np.random.default_rng(42)

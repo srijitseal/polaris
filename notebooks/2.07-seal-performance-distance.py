@@ -170,15 +170,115 @@ def bin_performance(distances: np.ndarray, errors_sq: np.ndarray,
 
 
 
+def plot_performance_over_distance(pred_df: pd.DataFrame, output_dir: Path, dpi: int) -> pd.DataFrame:
+    """Plot performance-over-distance curves from predictions dataframe.
+
+    Returns summary dataframe with per-endpoint degradation ratios and Spearman ρ.
+    """
+    strat_colors = {"cluster": "steelblue", "time": "coral", "target": "forestgreen"}
+    active_endpoints = sorted(pred_df["endpoint"].unique())
+    n_ep = len(active_endpoints)
+    ncols = 2
+    nrows = (n_ep + ncols - 1) // ncols
+
+    summary_rows = []
+
+    plt.rcParams.update({"font.size": 16, "axes.labelsize": 18, "axes.titlesize": 20,
+                         "xtick.labelsize": 14, "ytick.labelsize": 14, "legend.fontsize": 14})
+    fig, axes = plt.subplots(nrows, ncols, figsize=(9 * ncols, 6 * nrows))
+    if n_ep == 1:
+        axes = np.array([axes])
+    axes = axes.flatten()
+
+    for ax_idx, ep in enumerate(active_endpoints):
+        ax = axes[ax_idx]
+        ep_pred = pred_df[pred_df["endpoint"] == ep]
+
+        # Pool all distances for shared binning
+        all_dists = ep_pred["struct_1nn"].values
+        bins = make_sliding_bins(all_dists)
+
+        for strat_name in ["cluster", "time", "target"]:
+            strat_pred = ep_pred[ep_pred["strategy"] == strat_name]
+            if strat_pred.empty:
+                continue
+
+            # Per-fold curves
+            fold_curves = []
+            for fold_id in sorted(strat_pred["fold"].unique()):
+                fold_pred = strat_pred[strat_pred["fold"] == fold_id]
+                dists = fold_pred["struct_1nn"].values
+                sq_errors = (fold_pred["y_pred"] - fold_pred["y_true"]).values ** 2
+                curve = bin_performance(dists, sq_errors, bins)
+                fold_curves.append(curve)
+
+            centers = sorted(fold_curves[0].keys())
+            values = np.array([[c[center] for center in centers] for c in fold_curves])
+
+            median_vals = np.nanmedian(values, axis=0)
+            lo_vals = np.nanpercentile(values, 10, axis=0)
+            hi_vals = np.nanpercentile(values, 90, axis=0)
+
+            valid = ~np.isnan(median_vals)
+            c_arr = np.array(centers)
+
+            # Spearman ρ (distance vs |error| pooled across folds)
+            abs_errors = np.abs(strat_pred["y_pred"] - strat_pred["y_true"]).values
+            rho, _ = spearmanr(strat_pred["struct_1nn"].values, abs_errors)
+
+            color = strat_colors[strat_name]
+            ax.plot(c_arr[valid], median_vals[valid], color=color,
+                    label=f"{strat_name} (ρ={rho:.2f})", linewidth=2)
+            ax.fill_between(c_arr[valid], lo_vals[valid], hi_vals[valid],
+                            color=color, alpha=0.1)
+
+            # Summary stats
+            valid_medians = median_vals[valid]
+            if len(valid_medians) > 0:
+                summary_rows.append({
+                    "endpoint": ep,
+                    "strategy": strat_name,
+                    "rmse_closest_bin": float(valid_medians[0]),
+                    "rmse_farthest_bin": float(valid_medians[-1]),
+                    "degradation_ratio": float(valid_medians[-1] / valid_medians[0]) if valid_medians[0] > 0 else np.nan,
+                    "spearman_rho": float(rho),
+                })
+
+        ax.set_xlabel("1-NN Jaccard distance")
+        ax.set_ylabel("RMSE")
+        ax.set_title(ep, fontweight="bold")
+        ax.legend()
+
+    for i in range(n_ep, len(axes)):
+        axes[i].set_visible(False)
+
+    fig.tight_layout()
+    fig.savefig(output_dir / "performance_over_distance_v2.png", dpi=dpi, bbox_inches="tight")
+    logger.info("Saved performance_over_distance_v2.png")
+    plt.close("all")
+
+    return pd.DataFrame(summary_rows)
+
+
 @app.command()
 def main(
     output_dir: Path = typer.Option(
         PROCESSED_DATA_DIR / "2.07-seal-performance-distance", help="Output directory"
     ),
     dpi: int = typer.Option(DEFAULT_DPI, help="DPI for saved figures"),
+    figures_only: bool = typer.Option(False, help="Regenerate figures from existing predictions without retraining"),
 ) -> None:
     set_style()
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── Figures-only mode ─────────────────────────────────────────────
+    if figures_only:
+        logger.info("Figures-only mode: loading existing predictions")
+        pred_df = pd.read_parquet(output_dir / "predictions.parquet")
+        summary_df = plot_performance_over_distance(pred_df, output_dir, dpi)
+        summary_df.to_csv(output_dir / "performance_distance_summary.csv", index=False)
+        logger.info("Figures regenerated (no models retrained)")
+        return
 
     # ── 1. Load data ──────────────────────────────────────────────────
     logger.info("Loading data")

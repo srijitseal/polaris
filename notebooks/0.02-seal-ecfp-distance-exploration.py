@@ -184,18 +184,20 @@ def main(
     # 1-NN within training set
     train_within_1nn = np.array([np.sort(dist_square[ti, train_idx])[1] for ti in train_idx])  # [1] to skip self
 
-    fig, ax = plt.subplots(figsize=(9, 5))
-    bins = np.linspace(0, 1, 101)
-    ax.hist(train_within_1nn, bins=bins, density=True, alpha=0.6, color="steelblue", label=f"Within-train 1-NN (n={len(train_idx)})", edgecolor="white")
-    ax.hist(test_to_train_1nn, bins=bins, density=True, alpha=0.6, color="coral", label=f"Test-to-train 1-NN (n={len(test_idx)})", edgecolor="white")
-    ax.set_xlabel("Tanimoto distance")
-    ax.set_ylabel("Density")
-    ax.set_title("Test-to-train vs within-train 1-NN distances")
-    ax.legend()
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    bins = np.linspace(0, 1, 51)
+    weights_train = np.ones_like(train_within_1nn) / len(train_within_1nn)
+    weights_test = np.ones_like(test_to_train_1nn) / len(test_to_train_1nn)
+    ax.hist(train_within_1nn, bins=bins, weights=weights_train, alpha=0.6, color="steelblue", label=f"Within-train 1-NN (n={len(train_idx):,})", edgecolor="white", linewidth=0.5)
+    ax.hist(test_to_train_1nn, bins=bins, weights=weights_test, alpha=0.6, color="coral", label=f"Test-to-train 1-NN (n={len(test_idx):,})", edgecolor="white", linewidth=0.5)
+    ax.set_xlabel("Jaccard distance")
+    ax.set_ylabel("Relative frequency")
+    ax.set_xlim(0, 1)
+    ax.legend(frameon=True, fontsize=9)
 
-    for label, vals, color in [("within-train", train_within_1nn, "steelblue"), ("test-to-train", test_to_train_1nn, "coral")]:
+    for vals, color in [(train_within_1nn, "steelblue"), (test_to_train_1nn, "coral")]:
         med = np.median(vals)
-        ax.axvline(med, color=color, linestyle="--", alpha=0.7)
+        ax.axvline(med, color=color, linestyle="--", alpha=0.7, linewidth=1)
 
     fig.tight_layout()
     fig.savefig(output_dir / "train_vs_test_distances.png", dpi=dpi, bbox_inches="tight")
