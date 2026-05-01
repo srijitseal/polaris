@@ -528,7 +528,8 @@ def main(
                     test_prot = [prot_smiles[i] for i in test_idx_arr]
                     y_pred = train_chemprop(train_prot, y_tr, test_prot,
                                            cache_dir=chemprop_cache,
-                                           cache_key=f"2.11_{ep}_{strategy}_fold{fold_id}")
+                                           cache_key=f"2.11_{ep}_{strategy}_fold{fold_id}",
+                                           checkpoint_dir=model_dir / "models")
 
                 # Competition metrics
                 mae = mean_absolute_error(y_te, y_pred)

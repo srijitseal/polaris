@@ -655,6 +655,7 @@ def main(
                         train_smiles, y_train, test_smiles,
                         cache_dir=chemprop_cache_dir,
                         cache_key=f"2.07_{ep}_{strat_name}_fold{fold_id}",
+                        checkpoint_dir=model_dir / "models",
                     )
 
                 sq_errors = (y_pred - y_test) ** 2

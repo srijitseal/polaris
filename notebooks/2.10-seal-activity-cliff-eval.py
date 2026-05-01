@@ -554,6 +554,7 @@ def main(
                     train_prot, y_tr, test_prot,
                     cache_dir=chemprop_cache,
                     cache_key=f"2.10_{ep}_cluster_fold{fold_id}",
+                    checkpoint_dir=model_dir / "models",
                 )
 
             se = (y_te - y_pred) ** 2

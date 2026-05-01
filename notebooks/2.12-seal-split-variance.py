@@ -517,7 +517,8 @@ def main(
                     test_prot = [prot_smiles[i] for i in np.where(test_mask)[0]]
                     y_pred = train_chemprop(train_prot, y_tr, test_prot,
                                            cache_dir=chemprop_cache,
-                                           cache_key=f"2.12_{ep}_random_r{repeat}_fold{fold_id}")
+                                           cache_key=f"2.12_{ep}_random_r{repeat}_fold{fold_id}",
+                                           checkpoint_dir=model_dir / "models")
 
                 mae = mean_absolute_error(y_te, y_pred)
                 r2 = r2_score(y_te, y_pred)
@@ -570,7 +571,8 @@ def main(
                     test_prot = [prot_smiles[i] for i in np.where(test_mask)[0]]
                     y_pred = train_chemprop(train_prot, y_tr, test_prot,
                                            cache_dir=chemprop_cache,
-                                           cache_key=f"2.12_{ep}_cluster_r{repeat}_fold{fold_id}")
+                                           cache_key=f"2.12_{ep}_cluster_r{repeat}_fold{fold_id}",
+                                           checkpoint_dir=model_dir / "models")
 
                 mae = mean_absolute_error(y_te, y_pred)
                 r2 = r2_score(y_te, y_pred)

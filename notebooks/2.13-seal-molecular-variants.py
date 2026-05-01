@@ -713,6 +713,7 @@ def main(
                     train_prot_ep, y_tr, test_prot_ep,
                     cache_dir=chemprop_cache,
                     cache_key=f"2.13_{ep}_cluster_fold{fold_id}",
+                    checkpoint_dir=model_dir / "models",
                 )
 
             # Store out-of-fold predictions

@@ -542,6 +542,7 @@ def main(
                     train_prot_fold, y[tr], all_res_smiles,
                     cache_dir=chemprop_cache,
                     cache_key=f"2.15_{ep}_cluster_fold{fold_id}_allres",
+                    checkpoint_dir=model_dir / "models",
                 )
 
                 for name, (s, e) in res_slices.items():

@@ -407,6 +407,7 @@ def main(
                 train_prot, y_tr, test_prot,
                 cache_dir=chemprop_cache,
                 cache_key=f"2.08_{ep}_baseline",
+                checkpoint_dir=model_dir / "models",
             )
 
         mae = mean_absolute_error(y_te, y_pred)

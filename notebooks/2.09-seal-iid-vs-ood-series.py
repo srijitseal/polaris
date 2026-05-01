@@ -564,11 +564,13 @@ def main(
                 train_prot, y_tr, iid_prot,
                 cache_dir=chemprop_cache,
                 cache_key=f"2.09_{ep}_iid_ood_iid",
+                checkpoint_dir=model_dir / "models",
             )
             y_pred_ood = train_chemprop(
                 train_prot, y_tr, ood_prot,
                 cache_dir=chemprop_cache,
                 cache_key=f"2.09_{ep}_iid_ood_ood",
+                checkpoint_dir=model_dir / "models",
             )
 
         se_iid = (y_iid - y_pred_iid) ** 2
