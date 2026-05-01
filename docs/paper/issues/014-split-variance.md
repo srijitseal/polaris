@@ -1,14 +1,14 @@
-# Random splits give false confidence — splitting strategy matters more than number of repeats
+# Random CV reproducibility is structural — between-strategy gap dominates within-strategy variance
 
 ## Summary
 
-Random 5-fold CV produces remarkably tight variance (RAE std 0.002–0.012) but at an optimistic level (mean RAE ~0.47). Cluster-based CV reveals the true deployment-relevant uncertainty (RAE std 0.007–0.064, range up to 0.182) at a harder level (mean RAE ~0.67). The key insight is not "single splits are noisy" — random CV is actually very stable — but that random CV gives **precise estimates of the wrong thing**. The splitting strategy matters far more than the number of repeats: distance-aware splits with repeated CV provide honest performance estimates with calibrated confidence intervals.
+Random 5-fold CV is highly reproducible (RAE std 0.002–0.012 across 5 repeats), but this tightness is a **structural artefact** of sampling design: each fold is an unbiased draw from the same joint distribution over chemistry and labels, so different seeds produce near-identical train/test marginals and near-identical error estimates. Cluster-based CV deliberately breaks this symmetry by sampling disjoint structural groups (RAE std 0.007–0.064) at a substantially harder performance level (MA-RAE ~0.67 vs ~0.47). The cluster/random std ratio varies per endpoint from 0.56× (KSOL, where cluster is tighter) to 14× (Caco-2 Efflux), median ~5× — "cluster is always noisier than random" is not uniformly true. The invariant is that the between-strategy MA-RAE gap (~0.20) dwarfs within-strategy spread by ~10×. The practical consequence: the choice of splitting strategy changes the reported answer far more than the number of repeats, and random CV's reproducibility should not be read as deployment confidence.
 
 ## Method
 
 1. **Random splits**: Generate 5 independent 5-fold CV assignments (seeds 0–4) per endpoint
 2. **Cluster splits**: Use all 5 precomputed repeats from `cluster_cv_folds.parquet` (stochastic EKM + MiniBatchKMeans)
-3. **Train and evaluate**: Optuna TPE-tuned XGBoost (30 trials, 3-fold CV, 9 hyperparameters; ADR-002) on ECFP4 + RDKit 2D descriptors per repeat x endpoint x fold (~450 models total)
+3. **Train and evaluate**: Optuna TPE-tuned XGBoost (30 trials, 3-fold CV, 9 hyperparameters; ADR-002) on ECFP4 + RDKit 2D descriptors per repeat × endpoint × fold (~450 models total)
 4. **Aggregate**: Per-repeat mean metrics (across 5 folds), then compute variance statistics across repeats
 
 ## Key Findings
@@ -27,7 +27,7 @@ Random 5-fold CV produces remarkably tight variance (RAE std 0.002–0.012) but 
 | MBPB | 0.402±0.003 | 0.009 | 0.618±0.022 | 0.063 |
 | MGMB | 0.454±0.007 | 0.019 | 0.629±0.064 | 0.182 |
 
-Random splits show tight variance (range 0.006–0.033). Cluster splits show wider ranges (0.018–0.182), with MGMB having the most extreme variance (RAE range 0.568–0.750).
+Random RAE std: 0.002–0.012; random RAE range: 0.006–0.033. Cluster RAE std: 0.007–0.064; cluster RAE range: 0.018–0.182. Cluster splits show wider variance on 8 of 9 endpoints; KSOL is the exception (cluster range 0.018 < random 0.033).
 
 ### Performance variance across repeats — R²
 
@@ -49,10 +49,26 @@ Cluster-split R² ranges are dramatic: MGMB spans 0.299–0.577 across 5 repeats
 
 | Strategy | Mean MA-RAE | Std | Range |
 |----------|-------------|-----|-------|
-| Random (5 repeats) | ~0.47 | ~0.003 | ~0.008 |
-| Cluster (5 repeats) | ~0.67 | ~0.010 | ~0.025 |
+| Random (5 repeats) | 0.472 | ~0.003 | ~0.008 |
+| Cluster (5 repeats) | 0.669 | ~0.010 | ~0.025 |
 
-Random MA-RAE is tightly clustered — 5 repeats look almost identical. Cluster MA-RAE shows meaningful spread, confirming that cluster-based evaluation is sensitive to which structural groups are held out. The gap between strategies (~0.20 MA-RAE) dwarfs the within-strategy variance.
+Random MA-RAE is tightly clustered — 5 repeats look almost identical. Cluster MA-RAE shows meaningful spread, confirming that cluster-based evaluation is sensitive to which structural groups are held out. The gap between strategies (~0.20 MA-RAE) dwarfs the within-strategy variance by ~10×.
+
+### Cluster/random std ratio per endpoint
+
+| Endpoint | Cluster RAE std | Random RAE std | Ratio (C/R) |
+|----------|----------------|----------------|-------------|
+| Caco-2 Efflux | 0.0365 | 0.0026 | 13.9× |
+| MGMB | 0.0637 | 0.0067 | 9.6× |
+| Caco-2 Papp A>B | 0.0230 | 0.0030 | 7.6× |
+| MBPB | 0.0222 | 0.0034 | 6.6× |
+| MPPB | 0.0104 | 0.0019 | 5.5× |
+| MLM CLint | 0.0156 | 0.0038 | 4.2× |
+| HLM CLint | 0.0270 | 0.0069 | 3.9× |
+| LogD | 0.0085 | 0.0051 | 1.7× |
+| **KSOL** | **0.0066** | **0.0118** | **0.56× (cluster tighter)** |
+
+Median ratio ~5×, spanning 0.56×–14×.
 
 ### Statistical tests (Mann-Whitney U)
 
@@ -68,17 +84,20 @@ Random MA-RAE is tightly clustered — 5 repeats look almost identical. Cluster 
 | MBPB | 25.0 | 0.0079 | 0.613 | 0.403 |
 | MGMB | 25.0 | 0.0079 | 0.613 | 0.451 |
 
-Mann-Whitney U tests confirm that cluster and random RAE distributions are entirely non-overlapping for all 9 endpoints (U = 25.0, p = 0.0079). The maximum U statistic (25 = 5 x 5, all cluster values exceed all random values) indicates complete separation. p = 0.0079 is the minimum achievable p-value for a two-sided test with n1 = n2 = 5.
+Mann-Whitney U tests confirm that cluster and random RAE distributions are entirely non-overlapping for all 9 endpoints (U = 25.0, p = 0.0079). The maximum U statistic (25 = 5 × 5, all cluster values exceed all random values) indicates complete separation. p = 0.0079 is the minimum achievable p-value for a two-sided test with n1 = n2 = 5. Note that KSOL, despite having a cluster std tighter than random, still shows complete separation in RAE medians — the strategy effect is on the mean, not just the variance.
 
 ### Interpretation
 
-The results reveal a subtlety beyond "single splits are noisy." Random CV is *not* noisy — 5 repeats produce nearly identical metrics. The problem is that random CV gives **precise estimates of the wrong thing**: performance on structurally similar test molecules that leaked across fold boundaries.
+The results reveal a subtlety beyond "single splits are noisy." Random CV is *not* noisy — 5 repeats produce nearly identical metrics. Two points worth separating:
 
-Cluster-based CV is genuinely variable because different EKM + KMeans seeds create different structural boundaries. Some repeats hold out "easier" chemical groups (structurally closer to training data), others hold out "harder" groups. This variance is *informative* — it reflects real uncertainty about how the model will perform on novel chemistry.
+1. **Random CV's reproducibility is structural, not informative.** By construction, random sampling produces folds with near-identical marginals over both the chemistry (domain) and the labels (co-domain). Each fold is an unbiased draw from the same joint, so different seeds produce near-identical metrics. Cluster and series-based splits deliberately bias the distribution in the held-out set (along chemical space and label space respectively), so different seeds produce qualitatively different "hard" subsets. This is a consequence of sampling design and should not be surprising.
 
-The practical takeaway is twofold:
-1. **Choosing the right splitting strategy matters far more than running more repeats.** Five random repeats with tight CIs give false confidence; five cluster repeats with wide CIs give an honest picture.
-2. **Report confidence intervals from distance-aware splits.** A single cluster-split could report R²=0.30 or R²=0.58 for MGMB — only the mean across repeats (0.49) with its CI gives the full story.
+2. **The consequence is not obvious.** Practitioners routinely report tight random-CV confidence intervals as evidence of reliable performance estimation. Concretely, random CV delivers precise estimates (MA-RAE ~0.47, std ~0.003) of a quantity — performance on near-duplicates that leak across fold boundaries — that does not correspond to deployment. The between-strategy MA-RAE gap (~0.20) is ~10× the within-strategy spread, so picking random over cluster changes the reported answer far more than running more repeats does. A single cluster-split can report R²=0.30 or R²=0.58 for MGMB — only the mean across repeats (0.49) with its CI gives the full story.
+
+The practical takeaways:
+
+1. **Splitting strategy matters far more than number of repeats.** Five random repeats with tight CIs give false confidence; five cluster repeats with wide CIs give an honest picture.
+2. **Report confidence intervals from distance-aware splits.** Narrow random-CV intervals are a property of the sampling, not of the model's generalization.
 
 ## Plots
 

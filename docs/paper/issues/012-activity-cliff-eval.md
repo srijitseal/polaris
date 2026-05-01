@@ -68,3 +68,21 @@ pixi run -e cheminformatics python notebooks/2.10-seal-activity-cliff-eval.py
 ## Source
 
 `notebooks/2.10-seal-activity-cliff-eval.py`
+
+## Follow-up: similarity-threshold sensitivity sweep
+
+A `sensitivity` subcommand sweeps the Tanimoto cutoff across {0.70, 0.75, 0.80, 0.85, 0.90, 0.95} while holding |Δactivity| ≥ 1.0 log unit fixed, reusing the existing out-of-fold predictions (no retraining). Cliff prevalence falls ~10× from 0.70 to 0.85 and ~5× from 0.85 to 0.95. RAE gap (cliff − non-cliff) is near zero or negative below 0.80 for LogD/KSOL/MLM (the cliff label is not selective), becomes reliably positive at ≥ 0.85, and above 0.90 four of nine endpoints collapse to zero cliff pairs. 0.85 on ECFP4 is therefore the empirical knee of the curve for this dataset rather than a universal convention: Stumpfe & Bajorath 2014's 0.85 applies to MACCS (ECFP4 equivalent ~0.56); van Tilborg et al. 2022 (MoleculeACE) use 0.9 on ECFP4 under a soft consensus across three similarity measures.
+
+### Outputs saved
+
+`data/processed/2.10-seal-activity-cliff-eval/`
+- `cliff_sensitivity.csv` — 54 rows (9 endpoints × 6 thresholds)
+- `cliff_sensitivity_pairs.parquet` — similar pairs (sim ≥ 0.70)
+- `cliff_sensitivity_pct.png`, `cliff_sensitivity_rae_gap.png`, `cliff_sensitivity_joint.png`
+- `cliff_sensitivity_combined.png` — combined 3-panel figure for manuscript Fig S5
+
+### Reproduce
+
+```bash
+pixi run -e cheminformatics python notebooks/2.10-seal-activity-cliff-eval.py sensitivity
+```
