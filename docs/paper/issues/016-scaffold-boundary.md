@@ -4,7 +4,7 @@
 
 ## Summary
 
-Scaffold splits give the user no control over the distribution shift being tested — and what they produce by default is structurally leaky and nearly indistinguishable from random. Despite the Murcko scaffold carrying real, endpoint-specific biological signal (same-scaffold pairs have smaller activity differences at any given fingerprint distance), the scaffold split procedure cannot leverage this because of degenerate group sizes (67.5% singletons) and pervasive cross-scaffold structural proximity (56.2% boundary violation rate). Distance-based methods, by contrast, let the user explicitly parametrize the degree of structural novelty.
+Scaffold splits give the user no control over the distribution shift being tested — and what they produce by default is structurally leaky and nearly indistinguishable from random. Despite the Murcko scaffold carrying real, endpoint-specific biological signal (same-scaffold pairs have smaller activity differences at any given fingerprint distance), the scaffold split procedure cannot leverage this because of degenerate group sizes (67.5% singletons) and pervasive cross-scaffold structural proximity (56.4% boundary violation rate). Distance-based methods, by contrast, let the user explicitly parametrize the degree of structural novelty.
 
 ## Hypothesis
 
@@ -26,11 +26,10 @@ The scaffold boundary is an untunable, arbitrary discretization of continuous ch
 
 | Metric | Value |
 |--------|-------|
-| Scaffold boundary violation rate | 56.2% (4,276/7,608 molecules) |
-| Overall 1-NN median distance | 0.188 |
+| Scaffold boundary violation rate | 56.4% (4,289/7,608 molecules) |
+| Overall 1-NN median distance | 0.189 |
 | Cross-scaffold 1-NN median distance | 0.233 |
-| Within-scaffold 1-NN median (non-singletons) | 0.206 |
-| Non-singletons with closer cross-scaffold neighbor | 36.8% |
+| Non-singletons with closer cross-scaffold neighbor | 37.2% |
 | Unique Murcko scaffolds | 3,337 |
 | Singleton scaffolds | 2,252 (67.5%) |
 
@@ -42,7 +41,7 @@ More than half of all molecules have their nearest neighbor in a *different* sca
 
 *Figure 2. Mean activity difference (|Δy|) as a function of Tanimoto distance, stratified by scaffold membership (same vs. different Murcko framework), for all 9 endpoints. At a given fingerprint distance, same-scaffold pairs tend to have smaller activity differences — but the magnitude and consistency of this effect is highly endpoint-specific.*
 
-Of 133 Mann-Whitney U tests (9 endpoints x distance bins with sufficient data), 94 were significant at p < 0.05 (expected by chance: 6.7). Among significant tests, 84/94 (89%) showed same-scaffold pairs having *smaller* activity differences at the same fingerprint distance.
+Of 136 Mann-Whitney U tests (9 endpoints × distance bins with sufficient data), 95 were significant at p < 0.05 uncorrected, and 91 remained significant after Benjamini-Hochberg FDR correction (expected by chance at α = 0.05: 6.8). Among BH-significant tests, 83/91 (91%) showed same-scaffold pairs having *smaller* activity differences at the same fingerprint distance.
 
 **Endpoint-specific patterns**:
 
@@ -64,11 +63,11 @@ This endpoint-specificity is itself the problem: a scaffold split applies the *s
 
 ![Boundary violation summary](../../../data/processed/2.16-araripe-scaffold-boundary/boundary_violation_summary.png)
 
-*Figure 3. Left: scatter of within-scaffold vs. cross-scaffold 1-NN distance for non-singleton molecules — 36.8% have a closer neighbor in a different scaffold group (below diagonal). Right: fraction of same-scaffold pairs by distance bin, averaged across endpoints — same-scaffold pairs are a small minority at the distances relevant to model evaluation (>0.2).*
+*Figure 3. Left: scatter of within-scaffold vs. cross-scaffold 1-NN distance for non-singleton molecules — 37.2% have a closer neighbor in a different scaffold group (below diagonal). Right: fraction of same-scaffold pairs by distance bin, averaged across endpoints — same-scaffold pairs are a small minority at the distances relevant to model evaluation (>0.2).*
 
-**Scaffold split**: Fixed by the Murcko decomposition. No parameters. Produces median test-to-train 1-NN of 0.246 (NB 2.11), yielding MA-RAE 0.534 — barely worse than random (0.480).
+**Scaffold split**: Fixed by the Murcko decomposition. No parameters. Produces median test-to-train 1-NN of ~0.25 (NB 2.11), yielding MA-RAE 0.510 — barely worse than random (0.473).
 
-**Distance-based split**: The user controls cluster cutoff, number of clusters, minimum test-to-train distance. Cluster-based splitting produces median 1-NN of 0.424 and MA-RAE 0.724 (NB 2.11). The degree of structural novelty is explicitly parametrized and can be matched to the deployment scenario.
+**Distance-based split**: The user controls cluster cutoff, number of clusters, minimum test-to-train distance. Cluster-based splitting produces median 1-NN of ~0.42 and MA-RAE 0.672 (NB 2.11, mean across 9 endpoints from `aggregated_metrics.csv`). The degree of structural novelty is explicitly parametrized and can be matched to the deployment scenario.
 
 ## Interpretation
 
@@ -78,7 +77,7 @@ But the scaffold *split procedure* cannot leverage this because:
 
 1. **No tunability**: The boundary is fixed by the decomposition — the user cannot adjust the degree of distribution shift to match their deployment scenario.
 2. **Degenerate size distribution**: 67.5% of scaffolds are singletons. Greedy assignment of singletons to folds is indistinguishable from random assignment.
-3. **Structural leakage**: 56.2% of molecules have their nearest neighbor in a different scaffold group. The most informative training molecule sits on the wrong side of the boundary.
+3. **Structural leakage**: 56.4% of molecules have their nearest neighbor in a different scaffold group. The most informative training molecule sits on the wrong side of the boundary.
 4. **Endpoint-agnostic**: The scaffold effect varies dramatically across endpoints (strong for Caco-2 Efflux, negligible for MBPB), but the split applies one boundary to all.
 
 Distance-based methods avoid all four problems: the user sets the distance threshold, the grouping is based on the same feature space as the model, there are no singleton artifacts, and the split can be calibrated per endpoint if needed.

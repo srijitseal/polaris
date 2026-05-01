@@ -168,20 +168,19 @@ All strategies produced balanced fold sizes (max/min ratio < 1.15). Distance dis
 
 **1. Scaffold boundary violations**:
 - For each molecule, identified nearest neighbor overall and nearest neighbor with a different Murcko scaffold
-- **56.2% boundary violation rate** (4,276/7,608 molecules): more than half of all molecules have their nearest neighbor in a *different* scaffold group
+- **56.4% boundary violation rate** (4,289/7,608 molecules): more than half of all molecules have their nearest neighbor in a *different* scaffold group
 - The scaffold boundary does not separate structurally similar molecules
 
 **2. Cross-scaffold proximity**:
-- Overall 1-NN median distance: 0.188; cross-scaffold 1-NN median: 0.233 — distributions nearly overlap
-- Within-scaffold 1-NN median (non-singletons): 0.206
-- 36.8% of non-singleton molecules have a closer cross-scaffold neighbor than within-scaffold
+- Overall 1-NN median distance: 0.189; cross-scaffold 1-NN median: 0.233 — distributions nearly overlap
+- 37.2% of non-singleton molecules have a closer cross-scaffold neighbor than within-scaffold
 - The most informative training molecule often sits on the wrong side of the scaffold boundary
 
 **3. Activity concordance conditioned on scaffold**:
 - All ~29M molecule pairs per endpoint, binned by Tanimoto distance (width 0.05)
 - Compared mean |Δactivity| for same-scaffold vs different-scaffold pairs per bin
-- 94/133 Mann-Whitney U tests significant (p < 0.05); expected by chance: 6.7
-- Among significant tests, 84/94 (89%) showed same-scaffold pairs having *smaller* activity differences
+- 95/136 Mann-Whitney U tests significant uncorrected (p < 0.05); 91/136 remain significant after Benjamini-Hochberg FDR correction; expected by chance at α=0.05: 6.8
+- Among BH-significant tests, 83/91 (91%) showed same-scaffold pairs having *smaller* activity differences
 - **Endpoint-specific patterns** reveal the scaffold carries real biological signal:
   - Caco-2 Efflux: strongest effect — same-scaffold |Δy| flat (~0.25) while different-scaffold rises to 0.52 (P-gp substrate recognition is scaffold-dependent)
   - HLM CLint, MLM CLint: strong consistent effect across all distance bins (CYP450 metabolic soft-spot accessibility)
@@ -202,7 +201,7 @@ All strategies produced balanced fold sizes (max/min ratio < 1.15). Distance dis
 
 ### 7. Random cross-validation gives precise estimates of the wrong thing
 
-**Claim**: Random CV is highly reproducible but produces precise estimates of a quantity that does not correspond to deployment performance. The choice of splitting strategy is far more consequential than number of repeats.
+**Claim**: Random CV's low between-repeat variance is a structural artefact of sampling design — each fold is an unbiased draw from the same joint, so different seeds produce near-identical marginals and near-identical estimates. The tightness is not informative; it is a precision estimate of a quantity (performance on near-duplicates leaking across folds) that does not correspond to deployment. The between-strategy MA-RAE gap dwarfs within-strategy spread by an order of magnitude, so splitting strategy dominates repeat count regardless of which within-strategy reproducibility is tighter on any given endpoint.
 
 **Setup** (Optuna TPE-tuned XGBoost):
 - 5 independent random 5-fold CV repeats (seeds 0–4)
@@ -210,14 +209,14 @@ All strategies produced balanced fold sizes (max/min ratio < 1.15). Distance dis
 - ~450 models total
 
 **Key findings**:
-- Random splits: RAE std 0.002–0.012, ranges 0.009–0.055 — remarkably tight
-- Cluster splits: 3–17× wider ranges (0.057–0.185), RAE std 0.020–0.060
+- Random splits: RAE std 0.002–0.012, ranges 0.006–0.033 — remarkably tight, as expected from unbiased draws over the same joint
+- Cluster splits: RAE std 0.007–0.064, ranges 0.018–0.182 — cluster/random std ratio spans 0.56× (KSOL, where cluster is tighter) to 14× (Caco-2 Efflux), median ~5×
 - MGMB most extreme: cluster R² spans 0.299–0.577 across 5 repeats — "poor" or "moderate" depending on seed
 - **Mann-Whitney U tests**: U = 25.0, p = 0.0079 for all 9 endpoints — cluster and random RAE distributions entirely non-overlapping (U=25 is maximum possible for n1=n2=5; p=0.0079 is minimum achievable)
-- MA-RAE gap between strategies (~0.20) dwarfs within-strategy variance by an order of magnitude
+- MA-RAE gap between strategies (~0.20) dwarfs within-strategy variance by ~10×, even for KSOL where cluster is the more reproducible strategy
 - Random splits leak structurally similar molecules across fold boundaries (median test-to-train 1-NN of 0.203)
 
-**Practical recommendation**: Use distance-aware splits with multiple repeats and report confidence intervals. Five cluster repeats with wide CIs give an honest picture; 20 random repeats with narrow CIs give false confidence.
+**Practical recommendation**: Use distance-aware splits with multiple repeats and report confidence intervals. Five cluster repeats with wide CIs give an honest picture; narrow random-CV CIs are a property of sampling, not of generalization.
 
 **Figures**: Figure S3 (RAE distributions), Table S3 (R² variance) — supplementary
 

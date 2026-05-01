@@ -21,7 +21,7 @@ In `make_endpoint_folds()` (`notebooks/2.03-seal-cluster-split.py`):
 ## Consequences
 
 **Benefits:**
-- All 9 endpoints achieve max/min fold size ratio < 1.12 (vs up to 6.6 before)
+- All 9 endpoints achieve max/min fold size ratio < 1.14 across all 5 repeats (vs up to 6.6 before); the worst case is MLM CLint repeat 0 at 1.1368 (1205/1060)
 - Works even for sparse endpoints (MGMB, 431 molecules → folds of ~86)
 - Preserves structural separation — molecules in the same k-means cluster stay in the same fold
 

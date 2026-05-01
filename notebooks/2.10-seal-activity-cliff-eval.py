@@ -7,21 +7,28 @@ molecules. Uses cluster-split CV (repeat 0, 5 folds) to train and evaluate.
 Demonstrates that smoothly interpolating models fail on activity cliffs.
 
 Usage:
-    pixi run -e cheminformatics python notebooks/2.10-seal-activity-cliff-eval.py
+    # Full eval (retrains XGBoost per fold; slow)
+    pixi run -e cheminformatics python notebooks/2.10-seal-activity-cliff-eval.py main
 
-Outputs:
+    # Threshold-sensitivity sweep (reuses predictions from main; fast)
+    pixi run -e cheminformatics python notebooks/2.10-seal-activity-cliff-eval.py sensitivity
+
+Outputs (main):
     data/processed/2.10-seal-activity-cliff-eval/cliff_stats.csv
     data/processed/2.10-seal-activity-cliff-eval/cliff_molecules.csv
     data/processed/2.10-seal-activity-cliff-eval/cliff_vs_noncliff_errors.csv
     data/processed/2.10-seal-activity-cliff-eval/summary_metrics.csv
     data/processed/2.10-seal-activity-cliff-eval/squared_error_distributions.png
     data/processed/2.10-seal-activity-cliff-eval/cliff_characterization.png
-    data/processed/2.10-seal-activity-cliff-eval/median_se_by_endpoint.png
-    data/processed/2.10-seal-activity-cliff-eval/mae_by_endpoint.png
-    data/processed/2.10-seal-activity-cliff-eval/r2_by_endpoint.png
-    data/processed/2.10-seal-activity-cliff-eval/spearman_by_endpoint.png
-    data/processed/2.10-seal-activity-cliff-eval/kendall_by_endpoint.png
-    data/processed/2.10-seal-activity-cliff-eval/rae_by_endpoint.png
+    data/processed/2.10-seal-activity-cliff-eval/{median_se,mae,r2,spearman,kendall,rae}_by_endpoint.png
+
+Outputs (sensitivity):
+    data/processed/2.10-seal-activity-cliff-eval/cliff_sensitivity.csv
+    data/processed/2.10-seal-activity-cliff-eval/cliff_sensitivity_pairs.parquet
+    data/processed/2.10-seal-activity-cliff-eval/cliff_sensitivity_pct.png
+    data/processed/2.10-seal-activity-cliff-eval/cliff_sensitivity_rae_gap.png
+    data/processed/2.10-seal-activity-cliff-eval/cliff_sensitivity_joint.png
+    data/processed/2.10-seal-activity-cliff-eval/cliff_sensitivity_combined.png
 """
 
 from pathlib import Path
@@ -30,6 +37,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import typer
+from matplotlib.gridspec import GridSpec
 from dimorphite_dl import protonate_smiles as dimorphite_protonate
 from loguru import logger
 from rdkit import Chem, RDLogger
@@ -507,6 +515,283 @@ def main(
         plt.close("all")
 
     logger.info(f"All outputs saved to {output_dir}")
+
+
+@app.command()
+def sensitivity(
+    output_dir: Path = typer.Option(
+        PROCESSED_DATA_DIR / "2.10-seal-activity-cliff-eval", help="Output directory"
+    ),
+    dpi: int = typer.Option(DEFAULT_DPI, help="DPI for saved figures"),
+    thresholds: str = typer.Option(
+        "0.70,0.75,0.80,0.85,0.90,0.95",
+        help="Comma-separated Tanimoto similarity thresholds to sweep",
+    ),
+    min_diff: float = typer.Option(1.0, help="Absolute activity difference threshold"),
+    reference_threshold: float = typer.Option(0.85, help="Reference sim threshold to highlight"),
+    floor_threshold: float = typer.Option(
+        0.70, help="Lowest similarity to retain pairs for joint density plot"
+    ),
+) -> None:
+    """Sweep the Tanimoto similarity threshold used in cliff definition.
+
+    Reuses out-of-fold predictions from the `main` command (no retraining).
+    Produces:
+      - cliff_sensitivity.csv — per (endpoint, threshold): cliff counts + cliff/non-cliff RAE
+      - cliff_sensitivity_pct.png — % cliff molecules vs threshold, per endpoint
+      - cliff_sensitivity_rae_gap.png — (cliff RAE − non-cliff RAE) vs threshold, per endpoint
+      - cliff_sensitivity_joint.png — joint (similarity, |Δactivity|) density per endpoint,
+        with cliff-definition lines overlaid at (reference_threshold, min_diff)
+    """
+    set_style()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    thresh_list = sorted(float(t) for t in thresholds.split(","))
+
+    logger.info("Loading canonical dataset")
+    df = pd.read_parquet(INTERIM_DATA_DIR / "expansion_tx.parquet")
+
+    logger.info("Loading precomputed distance matrix")
+    npz = np.load(INTERIM_DATA_DIR / "tanimoto_distance_matrix.npz", allow_pickle=True)
+    dist_square = squareform(npz["condensed"])
+    dist_mol_names = npz["molecule_names"]
+    name_to_dist_idx = {str(n): i for i, n in enumerate(dist_mol_names)}
+
+    errors_path = output_dir / "cliff_vs_noncliff_errors.csv"
+    if not errors_path.exists():
+        raise FileNotFoundError(
+            f"{errors_path} not found — run `main` first to generate predictions"
+        )
+    errors_df = pd.read_csv(errors_path)
+    logger.info(f"Loaded {len(errors_df)} existing test predictions")
+
+    rows = []
+    pair_records = []
+
+    for ep in ENDPOINTS:
+        mask = df[ep].notna().values
+        ep_df = df[mask].copy()
+        names = ep_df["Molecule Name"].values
+        n_mol = len(ep_df)
+
+        idx = np.array([name_to_dist_idx[n] for n in names])
+        D_sub = dist_square[np.ix_(idx, idx)]
+
+        raw = ep_df[ep].values
+        vals = clip_and_log_transform(raw) if ep in LOG_TRANSFORM_ENDPOINTS else raw
+
+        val_diff = np.abs(vals[:, None] - vals[None, :])
+        iu = np.triu_indices(n_mol, k=1)
+        D_upper = D_sub[iu]
+        diff_upper = val_diff[iu]
+        i_upper, j_upper = iu
+
+        ep_errors = errors_df[errors_df["endpoint"] == ep].copy()
+
+        for thr in thresh_list:
+            cutoff = 1.0 - thr
+            sim_mask = D_upper < cutoff
+            cliff_mask = sim_mask & (diff_upper >= min_diff)
+            n_sim = int(sim_mask.sum())
+            n_cliff_pairs = int(cliff_mask.sum())
+
+            cliff_i = i_upper[cliff_mask]
+            cliff_j = j_upper[cliff_mask]
+            cliff_mol_idx = np.unique(np.concatenate([cliff_i, cliff_j])) if n_cliff_pairs else np.array([], dtype=int)
+            cliff_set = set(names[cliff_mol_idx])
+            pct_cliff = 100.0 * len(cliff_set) / n_mol if n_mol else 0.0
+
+            cliff_rae = np.nan
+            noncliff_rae = np.nan
+            n_cliff_test = n_noncliff_test = 0
+            if not ep_errors.empty:
+                is_cliff = ep_errors["Molecule Name"].isin(cliff_set)
+                cliff_sub = ep_errors[is_cliff]
+                noncliff_sub = ep_errors[~is_cliff]
+                n_cliff_test = len(cliff_sub)
+                n_noncliff_test = len(noncliff_sub)
+
+                def _rae(sub: pd.DataFrame) -> float:
+                    if len(sub) < 5:
+                        return np.nan
+                    mae = (sub["y_true"] - sub["y_pred"]).abs().mean()
+                    mad = (sub["y_true"] - sub["y_true"].mean()).abs().mean()
+                    return mae / mad if mad > 0 else np.nan
+
+                cliff_rae = _rae(cliff_sub)
+                noncliff_rae = _rae(noncliff_sub)
+
+            rae_gap = (
+                cliff_rae - noncliff_rae
+                if not (np.isnan(cliff_rae) or np.isnan(noncliff_rae))
+                else np.nan
+            )
+
+            rows.append({
+                "endpoint": ep,
+                "sim_threshold": thr,
+                "min_diff": min_diff,
+                "n_molecules": n_mol,
+                "n_similar_pairs": n_sim,
+                "n_cliff_pairs": n_cliff_pairs,
+                "n_cliff_molecules": len(cliff_set),
+                "pct_cliff": pct_cliff,
+                "cliff_rae": cliff_rae,
+                "noncliff_rae": noncliff_rae,
+                "rae_gap": rae_gap,
+                "n_cliff_test": n_cliff_test,
+                "n_noncliff_test": n_noncliff_test,
+            })
+            logger.info(
+                f"  {ep} @ sim>{thr:.2f}: {n_cliff_pairs} cliff pairs, "
+                f"{len(cliff_set)}/{n_mol} cliff mols ({pct_cliff:.2f}%), "
+                f"cliff RAE={cliff_rae:.3f}, non-cliff RAE={noncliff_rae:.3f}"
+            )
+
+        floor_mask = D_upper < (1.0 - floor_threshold)
+        if floor_mask.any():
+            sims = 1.0 - D_upper[floor_mask]
+            diffs = diff_upper[floor_mask]
+            for s, d in zip(sims, diffs, strict=False):
+                pair_records.append({"endpoint": ep, "similarity": float(s), "activity_diff": float(d)})
+
+    sens_df = pd.DataFrame(rows)
+    sens_df.to_csv(output_dir / "cliff_sensitivity.csv", index=False)
+    logger.info(f"Saved cliff_sensitivity.csv ({len(sens_df)} rows)")
+
+    pairs_df = pd.DataFrame(pair_records)
+    pairs_df.to_parquet(output_dir / "cliff_sensitivity_pairs.parquet", index=False)
+    logger.info(f"Saved cliff_sensitivity_pairs.parquet ({len(pairs_df)} pairs)")
+
+    # ── Figure: % cliff vs threshold ─────────────────────────────────
+    fig, ax = plt.subplots(figsize=(9, 6))
+    for ep in ENDPOINTS:
+        sub = sens_df[sens_df["endpoint"] == ep].sort_values("sim_threshold")
+        if sub.empty:
+            continue
+        ax.plot(sub["sim_threshold"], sub["pct_cliff"], marker="o", label=ep)
+    ax.axvline(reference_threshold, color="gray", linestyle="--", alpha=0.6,
+               label=f"Reference sim={reference_threshold}")
+    ax.set_xlabel("Tanimoto similarity threshold")
+    ax.set_ylabel("% cliff molecules")
+    ax.set_title(f"Activity-cliff prevalence vs similarity threshold (|Δactivity| ≥ {min_diff} log)")
+    ax.legend(fontsize=8, loc="center left", bbox_to_anchor=(1.02, 0.5))
+    fig.tight_layout()
+    fig.savefig(output_dir / "cliff_sensitivity_pct.png", dpi=dpi, bbox_inches="tight")
+    logger.info("Saved cliff_sensitivity_pct.png")
+    plt.close("all")
+
+    # ── Figure: cliff − non-cliff RAE gap vs threshold ───────────────
+    fig, ax = plt.subplots(figsize=(9, 6))
+    for ep in ENDPOINTS:
+        sub = sens_df[sens_df["endpoint"] == ep].sort_values("sim_threshold").dropna(subset=["rae_gap"])
+        if sub.empty:
+            continue
+        ax.plot(sub["sim_threshold"], sub["rae_gap"], marker="o", label=ep)
+    ax.axhline(0, color="gray", linestyle="-", alpha=0.3)
+    ax.axvline(reference_threshold, color="gray", linestyle="--", alpha=0.6,
+               label=f"Reference sim={reference_threshold}")
+    ax.set_xlabel("Tanimoto similarity threshold")
+    ax.set_ylabel("RAE gap (cliff − non-cliff)")
+    ax.set_title("Cliff error penalty vs similarity threshold")
+    ax.legend(fontsize=8, loc="center left", bbox_to_anchor=(1.02, 0.5))
+    fig.tight_layout()
+    fig.savefig(output_dir / "cliff_sensitivity_rae_gap.png", dpi=dpi, bbox_inches="tight")
+    logger.info("Saved cliff_sensitivity_rae_gap.png")
+    plt.close("all")
+
+    # ── Figure: joint (similarity, |Δactivity|) density per endpoint ─
+    active_eps = [ep for ep in ENDPOINTS if not pairs_df[pairs_df["endpoint"] == ep].empty]
+    n_ep = len(active_eps)
+    if n_ep:
+        ncols = 3
+        nrows = (n_ep + ncols - 1) // ncols
+        fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 4 * nrows))
+        axes = np.atleast_2d(axes).ravel()
+        for k, ep in enumerate(active_eps):
+            ax = axes[k]
+            sub = pairs_df[pairs_df["endpoint"] == ep]
+            hb = ax.hexbin(sub["similarity"], sub["activity_diff"], gridsize=30,
+                           cmap="viridis", mincnt=1, bins="log")
+            ax.axvline(reference_threshold, color="white", linestyle="--", linewidth=1.2)
+            ax.axhline(min_diff, color="white", linestyle="--", linewidth=1.2)
+            ax.set_xlabel("Tanimoto similarity")
+            ax.set_ylabel("|Δactivity|")
+            ax.set_title(ep, fontsize=10, fontweight="bold")
+            fig.colorbar(hb, ax=ax, label="log10(pairs)")
+        for k in range(n_ep, len(axes)):
+            axes[k].set_visible(False)
+        fig.suptitle(
+            f"Joint (similarity, |Δactivity|) density of pairs with sim ≥ {floor_threshold}\n"
+            f"White dashed lines: cliff definition (sim ≥ {reference_threshold}, |Δ| ≥ {min_diff})",
+            fontsize=12,
+            y=1.00,
+        )
+        fig.tight_layout()
+        fig.savefig(output_dir / "cliff_sensitivity_joint.png", dpi=dpi, bbox_inches="tight")
+        logger.info("Saved cliff_sensitivity_joint.png")
+        plt.close("all")
+
+    # ── Combined Fig S5: (a) prevalence, (b) RAE gap, (c) joint density ──
+    fig = plt.figure(figsize=(15, 16))
+    gs = GridSpec(2, 6, figure=fig, height_ratios=[1.0, 2.2], hspace=0.28, wspace=1.2)
+
+    ax_a = fig.add_subplot(gs[0, 0:3])
+    for ep in ENDPOINTS:
+        sub = sens_df[sens_df["endpoint"] == ep].sort_values("sim_threshold")
+        if sub.empty:
+            continue
+        ax_a.plot(sub["sim_threshold"], sub["pct_cliff"], marker="o", label=ep)
+    ax_a.axvline(reference_threshold, color="gray", linestyle="--", alpha=0.6)
+    ax_a.set_xlabel("Tanimoto similarity threshold")
+    ax_a.set_ylabel("% cliff molecules")
+    ax_a.text(-0.14, 1.02, "a", transform=ax_a.transAxes,
+              fontsize=16, fontweight="bold", va="bottom", ha="left")
+
+    ax_b = fig.add_subplot(gs[0, 3:6])
+    for ep in ENDPOINTS:
+        sub = sens_df[sens_df["endpoint"] == ep].sort_values("sim_threshold").dropna(subset=["rae_gap"])
+        if sub.empty:
+            continue
+        ax_b.plot(sub["sim_threshold"], sub["rae_gap"], marker="o", label=ep)
+    ax_b.axhline(0, color="gray", linestyle="-", alpha=0.3)
+    ax_b.axvline(reference_threshold, color="gray", linestyle="--", alpha=0.6)
+    ax_b.set_xlabel("Tanimoto similarity threshold")
+    ax_b.set_ylabel("RAE gap (cliff − non-cliff)")
+    ax_b.legend(fontsize=8, loc="center left", bbox_to_anchor=(1.02, 0.5))
+    ax_b.text(-0.14, 1.02, "b", transform=ax_b.transAxes,
+              fontsize=16, fontweight="bold", va="bottom", ha="left")
+
+    if n_ep:
+        gs_c = gs[1, :].subgridspec(3, 3, hspace=0.45, wspace=0.45)
+        panel_c_axes = []
+        for k, ep in enumerate(active_eps):
+            r, c = divmod(k, 3)
+            ax = fig.add_subplot(gs_c[r, c])
+            panel_c_axes.append(ax)
+            sub = pairs_df[pairs_df["endpoint"] == ep]
+            hb = ax.hexbin(sub["similarity"], sub["activity_diff"], gridsize=25,
+                           cmap="viridis", mincnt=1, bins="log")
+            ax.axvline(reference_threshold, color="white", linestyle="--", linewidth=1.0)
+            ax.axhline(min_diff, color="white", linestyle="--", linewidth=1.0)
+            ax.set_xlabel("Tanimoto similarity", fontsize=9)
+            ax.set_ylabel("|Δactivity|", fontsize=9)
+            ax.tick_params(labelsize=8)
+            ax.text(0.02, 0.98, ep, transform=ax.transAxes,
+                    fontsize=9, fontweight="bold", va="top", ha="left",
+                    color="white",
+                    bbox=dict(facecolor="black", alpha=0.45, edgecolor="none", pad=2))
+            fig.colorbar(hb, ax=ax, label="log10(pairs)", shrink=0.85)
+        if panel_c_axes:
+            panel_c_axes[0].text(
+                -0.22, 1.06, "c", transform=panel_c_axes[0].transAxes,
+                fontsize=16, fontweight="bold", va="bottom", ha="left",
+            )
+
+    fig.savefig(output_dir / "cliff_sensitivity_combined.png", dpi=dpi, bbox_inches="tight")
+    logger.info("Saved cliff_sensitivity_combined.png")
+    plt.close("all")
+
+    logger.info(f"All sensitivity outputs saved to {output_dir}")
 
 
 if __name__ == "__main__":
