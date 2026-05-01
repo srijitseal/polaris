@@ -48,6 +48,13 @@ download = "bash scripts/download_data.sh"
 [tool.pixi.feature.cheminformatics.dependencies]
 rdkit = ">=2024.03"
 pyarrow = ">=14"
+chemprop = ">=2.2"
+
+[tool.pixi.feature.cheminformatics.system-requirements]
+cuda = "12"
+
+[tool.pixi.feature.cheminformatics.target.linux-64.dependencies]
+pytorch-gpu = ">=2.0"
 
 [tool.pixi.environments]
 lint = { features = ["lint"] }
