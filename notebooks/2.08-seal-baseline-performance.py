@@ -62,9 +62,15 @@ RDLogger.DisableLog("rdApp.*")
 app = typer.Typer()
 
 ENDPOINTS = [
-    "LogD", "KSOL", "HLM CLint", "MLM CLint",
-    "Caco-2 Permeability Papp A>B", "Caco-2 Permeability Efflux",
-    "MPPB", "MBPB", "MGMB",
+    "LogD",
+    "KSOL",
+    "HLM CLint",
+    "MLM CLint",
+    "Caco-2 Permeability Papp A>B",
+    "Caco-2 Permeability Efflux",
+    "MPPB",
+    "MBPB",
+    "MGMB",
 ]
 
 LOG_TRANSFORM_ENDPOINTS = [ep for ep in ENDPOINTS if ep.lower() != "logd"]
@@ -86,6 +92,7 @@ DESC_CALC = MolecularDescriptorCalculator(DESCRIPTOR_NAMES)
 
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
+
 
 def clip_and_log_transform(x: np.ndarray) -> np.ndarray:
     return np.log10(np.clip(x, 1e-10, None) + 1)
@@ -132,11 +139,16 @@ def compute_features(smiles_list: list[str]) -> tuple[np.ndarray, np.ndarray]:
 
 # ── Migration ─────────────────────────────────────────────────────────────────
 
+
 def _migrate_flat_outputs(output_dir: Path) -> None:
     """Move pre-model-flag XGBoost outputs into xgboost/ subdirectory."""
     flat_files = [
-        "overall_metrics.csv", "predictions.parquet", "best_params.csv",
-        "r2_by_endpoint.png", "mae_by_endpoint.png", "spearman_by_endpoint.png",
+        "overall_metrics.csv",
+        "predictions.parquet",
+        "best_params.csv",
+        "r2_by_endpoint.png",
+        "mae_by_endpoint.png",
+        "spearman_by_endpoint.png",
         "scatter_predictions.png",
     ]
     xgboost_dir = output_dir / "xgboost"
@@ -153,6 +165,7 @@ def _migrate_flat_outputs(output_dir: Path) -> None:
 
 
 # ── Figure generation ─────────────────────────────────────────────────────────
+
 
 def _generate_figures(
     pred_df: pd.DataFrame,
@@ -187,8 +200,17 @@ def _generate_figures(
         ci_hi = [metrics_df.loc[metrics_df["endpoint"] == ep, hi_col].values[0] for ep in active_endpoints]
         yerr = np.array([[v - lo, hi - v] for v, lo, hi in zip(vals, ci_lo, ci_hi)]).T
 
-        ax.bar(x, vals, width, color=model_color, edgecolor="white", alpha=0.8,
-               yerr=yerr, capsize=4, error_kw={"linewidth": 1.2})
+        ax.bar(
+            x,
+            vals,
+            width,
+            color=model_color,
+            edgecolor="white",
+            alpha=0.8,
+            yerr=yerr,
+            capsize=4,
+            error_kw={"linewidth": 1.2},
+        )
         ax.set_xticks(x)
         ax.set_xticklabels(active_endpoints, rotation=45, ha="right", fontsize=8)
         ax.set_ylabel(ylabel)
@@ -211,16 +233,22 @@ def _generate_figures(
     for ax_idx, ep in enumerate(active_endpoints):
         ax = axes[ax_idx]
         ep_pred = pred_df[pred_df["endpoint"] == ep]
-        ax.scatter(ep_pred["y_true"], ep_pred["y_pred"], s=5, alpha=0.3,
-                   color=model_color, rasterized=True)
+        ax.scatter(ep_pred["y_true"], ep_pred["y_pred"], s=5, alpha=0.3, color=model_color, rasterized=True)
 
         lo = min(ep_pred["y_true"].min(), ep_pred["y_pred"].min())
         hi = max(ep_pred["y_true"].max(), ep_pred["y_pred"].max())
         ax.plot([lo, hi], [lo, hi], "k--", alpha=0.3, linewidth=1)
 
         r2_val = metrics_df.loc[metrics_df["endpoint"] == ep, "r2"].values[0]
-        ax.text(0.05, 0.95, f"R²={r2_val:.3f}", transform=ax.transAxes,
-                fontsize=8, verticalalignment="top", color=model_color)
+        ax.text(
+            0.05,
+            0.95,
+            f"R²={r2_val:.3f}",
+            transform=ax.transAxes,
+            fontsize=8,
+            verticalalignment="top",
+            color=model_color,
+        )
 
         suffix = " (log)" if ep in LOG_TRANSFORM_ENDPOINTS else ""
         ax.set_xlabel(f"True{suffix}")
@@ -238,6 +266,7 @@ def _generate_figures(
 
 
 # ── Combined figures ──────────────────────────────────────────────────────────
+
 
 def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
     """Load both models' metrics and produce side-by-side comparison figures."""
@@ -258,7 +287,8 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
     # Comparison CSV
     merge_cols = ["endpoint", "mae", "r2", "spearman_r", "rae", "kendall_tau"]
     comparison_df = (
-        xgb[merge_cols].rename(columns={c: f"{c}_xgboost" for c in merge_cols if c != "endpoint"})
+        xgb[merge_cols]
+        .rename(columns={c: f"{c}_xgboost" for c in merge_cols if c != "endpoint"})
         .merge(
             chemprop[merge_cols].rename(columns={c: f"{c}_chemprop" for c in merge_cols if c != "endpoint"}),
             on="endpoint",
@@ -276,9 +306,13 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
         ("rae", "RAE", "rae_comparison"),
     ]:
         plot_model_comparison_bars(
-            data_by_model, "endpoint", metric, ylabel,
+            data_by_model,
+            "endpoint",
+            metric,
+            ylabel,
             f"{ylabel} — XGBoost vs Chemprop (original split)",
-            combined_dir / f"{fname}.png", dpi=dpi,
+            combined_dir / f"{fname}.png",
+            dpi=dpi,
         )
         logger.info(f"Saved {fname}.png")
 
@@ -287,11 +321,10 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
+
 @app.command()
 def main(
-    output_dir: Path = typer.Option(
-        PROCESSED_DATA_DIR / "2.08-seal-baseline-performance", help="Output directory"
-    ),
+    output_dir: Path = typer.Option(PROCESSED_DATA_DIR / "2.08-seal-baseline-performance", help="Output directory"),
     dpi: int = typer.Option(DEFAULT_DPI, help="DPI for saved figures"),
     model: str = typer.Option("xgboost", help="Model architecture: xgboost or chemprop"),
     combined: bool = typer.Option(False, help="Generate combined XGBoost+Chemprop comparison figures"),
@@ -331,7 +364,6 @@ def main(
 
     train_smiles = train_df["SMILES"].tolist()
     test_smiles = test_df["SMILES"].tolist()
-    train_names = train_df["Molecule Name"].values
     test_names = test_df["Molecule Name"].values
 
     # ── 2. Protonate at each unique pH (both models use pH-appropriate SMILES) ──
@@ -404,7 +436,9 @@ def main(
             test_prot = [s for s, m in zip(prot_by_ph[ph]["test"], test_mask) if m]
             logger.info(f"  {ep} ({n_train} train, {n_test} test) — training Chemprop D-MPNN")
             y_pred = train_chemprop(
-                train_prot, y_tr, test_prot,
+                train_prot,
+                y_tr,
+                test_prot,
                 cache_dir=chemprop_cache,
                 cache_key=f"2.08_{ep}_baseline",
                 checkpoint_dir=model_dir / "models",
@@ -418,20 +452,31 @@ def main(
 
         logger.info(f"    MAE={mae:.3f}, R²={r2:.3f}, Spearman={sp_r:.3f}, RAE={rae:.3f}")
 
-        metric_rows.append({
-            "endpoint": ep, "ph": ph, "n_train": n_train, "n_test": n_test,
-            "mae": mae, "r2": r2, "spearman_r": sp_r, "kendall_tau": kt,
-            "rae": rae, "baseline_mad": baseline_mad,
-            "log_transformed": ep in LOG_TRANSFORM_ENDPOINTS,
-        })
+        metric_rows.append(
+            {
+                "endpoint": ep,
+                "ph": ph,
+                "n_train": n_train,
+                "n_test": n_test,
+                "mae": mae,
+                "r2": r2,
+                "spearman_r": sp_r,
+                "kendall_tau": kt,
+                "rae": rae,
+                "baseline_mad": baseline_mad,
+                "log_transformed": ep in LOG_TRANSFORM_ENDPOINTS,
+            }
+        )
 
         for j in range(len(y_te)):
-            prediction_rows.append({
-                "Molecule Name": te_names[j],
-                "endpoint": ep,
-                "y_true": float(y_te[j]),
-                "y_pred": float(y_pred[j]),
-            })
+            prediction_rows.append(
+                {
+                    "Molecule Name": te_names[j],
+                    "endpoint": ep,
+                    "y_true": float(y_te[j]),
+                    "y_pred": float(y_pred[j]),
+                }
+            )
 
     metrics_df = pd.DataFrame(metric_rows)
     logger.info(f"MA-RAE: {metrics_df['rae'].mean():.3f}")
@@ -458,13 +503,19 @@ def main(
             boot_sp.append(spearmanr(yt, yp).statistic)
             boot_rae.append(b_mae / baseline_mad if baseline_mad > 0 else np.nan)
 
-        boot_rows.append({
-            "endpoint": ep,
-            "mae_ci_lo": np.percentile(boot_mae, 2.5), "mae_ci_hi": np.percentile(boot_mae, 97.5),
-            "r2_ci_lo": np.percentile(boot_r2, 2.5), "r2_ci_hi": np.percentile(boot_r2, 97.5),
-            "spearman_ci_lo": np.percentile(boot_sp, 2.5), "spearman_ci_hi": np.percentile(boot_sp, 97.5),
-            "rae_ci_lo": np.percentile(boot_rae, 2.5), "rae_ci_hi": np.percentile(boot_rae, 97.5),
-        })
+        boot_rows.append(
+            {
+                "endpoint": ep,
+                "mae_ci_lo": np.percentile(boot_mae, 2.5),
+                "mae_ci_hi": np.percentile(boot_mae, 97.5),
+                "r2_ci_lo": np.percentile(boot_r2, 2.5),
+                "r2_ci_hi": np.percentile(boot_r2, 97.5),
+                "spearman_ci_lo": np.percentile(boot_sp, 2.5),
+                "spearman_ci_hi": np.percentile(boot_sp, 97.5),
+                "rae_ci_lo": np.percentile(boot_rae, 2.5),
+                "rae_ci_hi": np.percentile(boot_rae, 97.5),
+            }
+        )
         logger.info(
             f"  {ep}: R²=[{boot_rows[-1]['r2_ci_lo']:.3f}, {boot_rows[-1]['r2_ci_hi']:.3f}]  "
             f"RAE=[{boot_rows[-1]['rae_ci_lo']:.3f}, {boot_rows[-1]['rae_ci_hi']:.3f}]"

@@ -37,8 +37,6 @@ def plot_model_comparison_bars(
     ylabel, title : axis labels
     output_path : where to save the figure
     """
-    import pandas as pd
-
     model_names = list(data_by_model.keys())
     first_df = next(iter(data_by_model.values()))
     endpoints = sorted(first_df[endpoint_col].unique())
@@ -60,7 +58,9 @@ def plot_model_comparison_bars(
         offset = (i - n_models / 2 + 0.5) * width
         yerr = stds if any(s > 0 for s in stds) else None
         ax.bar(
-            x + offset, means, width,
+            x + offset,
+            means,
+            width,
             yerr=yerr,
             label=MODEL_LABELS.get(model_name, model_name),
             color=MODEL_COLORS.get(model_name, f"C{i}"),

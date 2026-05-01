@@ -9,6 +9,7 @@ from loguru import logger
 # Default training duration. Chemprop's own default is 50; increase for longer runs.
 DEFAULT_MAX_EPOCHS = 50
 ENSEMBLE_SIZE = 3
+MIN_VAL_FOR_EARLY_STOPPING = 5  # Skip early stopping if val set is smaller
 
 
 def train_chemprop(
@@ -66,6 +67,9 @@ def train_chemprop(
 
     from lightning.pytorch.callbacks import EarlyStopping
 
+    accelerator = "gpu" if torch.cuda.is_available() else "cpu"
+    devices = [0] if torch.cuda.is_available() else "auto"
+
     featurizer = featurizers.SimpleMoleculeMolGraphFeaturizer()
     test_pts = [data.MoleculeDatapoint.from_smi(smi) for smi in test_smiles]
 
@@ -96,10 +100,7 @@ def train_chemprop(
         val_idx = rng.choice(n_total, size=n_val, replace=False)
         train_idx = np.setdiff1d(np.arange(n_total), val_idx)
 
-        all_pts = [
-            data.MoleculeDatapoint.from_smi(smi, [float(y)])
-            for smi, y in zip(train_smiles, train_y)
-        ]
+        all_pts = [data.MoleculeDatapoint.from_smi(smi, [float(y)]) for smi, y in zip(train_smiles, train_y)]
         train_pts = [all_pts[j] for j in train_idx]
         val_pts = [all_pts[j] for j in val_idx]
 
@@ -121,21 +122,27 @@ def train_chemprop(
         test_loader = data.build_dataloader(test_dset, shuffle=False, num_workers=4)
 
         best_weights = _BestWeights()
-        early_stop = EarlyStopping(monitor="val_loss", patience=10, mode="min")
+        callbacks = [best_weights]
+        if n_val >= MIN_VAL_FOR_EARLY_STOPPING:
+            callbacks.append(EarlyStopping(monitor="val_loss", patience=10, mode="min"))
+        else:
+            logger.warning(f"Val set too small ({n_val} samples), skipping early stopping")
 
         trainer = pl.Trainer(
             logger=False,
             enable_checkpointing=False,
             enable_progress_bar=True,
             enable_model_summary=False,
-            accelerator="auto",
-            devices=[0],
+            accelerator=accelerator,
+            devices=devices,
             max_epochs=max_epochs,
-            callbacks=[early_stop, best_weights],
+            callbacks=callbacks,
         )
         trainer.fit(mpnn, train_loader, val_loader)
         n_epochs_trained = min(trainer.current_epoch + 1, max_epochs)
-        logger.info(f"Chemprop ensemble {i+1}/{ENSEMBLE_SIZE} | device={trainer.accelerator.__class__.__name__} | trained {n_epochs_trained}/{max_epochs} epochs | key={safe_key or 'no-cache'}")
+        logger.info(
+            f"Chemprop ensemble {i + 1}/{ENSEMBLE_SIZE} | device={trainer.accelerator.__class__.__name__} | trained {n_epochs_trained}/{max_epochs} epochs | key={safe_key or 'no-cache'}"
+        )
 
         if checkpoint_dir and safe_key:
             checkpoint_dir = Path(checkpoint_dir)
@@ -144,15 +151,21 @@ def train_chemprop(
             config_file = checkpoint_dir / "training_config.json"
             if not config_file.exists():
                 import json
-                config_file.write_text(json.dumps({
-                    "max_epochs": max_epochs,
-                    "val_fraction": val_fraction,
-                    "seed": seed,
-                    "n_ensemble": ENSEMBLE_SIZE,
-                    "architecture": "D-MPNN (BondMessagePassing + MeanAggregation + RegressionFFN)",
-                    "hidden_dim": 300,
-                    "depth": 3,
-                }, indent=2))
+
+                config_file.write_text(
+                    json.dumps(
+                        {
+                            "max_epochs": max_epochs,
+                            "val_fraction": val_fraction,
+                            "seed": seed,
+                            "n_ensemble": ENSEMBLE_SIZE,
+                            "architecture": "D-MPNN (BondMessagePassing + MeanAggregation + RegressionFFN)",
+                            "hidden_dim": 300,
+                            "depth": 3,
+                        },
+                        indent=2,
+                    )
+                )
 
         with torch.inference_mode():
             preds_batched = trainer.predict(mpnn, test_loader)
