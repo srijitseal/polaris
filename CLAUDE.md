@@ -15,25 +15,31 @@ pixi install
 # Download dataset from HuggingFace (also runs automatically on cheminformatics env activation)
 pixi run download
 
-# Run Python
+# Run Python (default env)
 pixi run python
+
+# Run an analysis notebook (cheminformatics env required for RDKit, Chemprop, PyArrow)
+pixi run -e cheminformatics python notebooks/2.08-seal-baseline-performance.py
+pixi run -e cheminformatics python notebooks/2.08-seal-baseline-performance.py --model chemprop
+pixi run -e cheminformatics python notebooks/2.08-seal-baseline-performance.py --combined
 ```
 
 ### Adding Dependencies
 
 - Add Python packages to `[project] dependencies` in `pyproject.toml`, not `[tool.pixi.dependencies]` (which is for conda packages)
+- RDKit, PyArrow, and Chemprop are conda-only; they go in `[tool.pixi.feature.cheminformatics.dependencies]`
 
 ### Code Quality
 
 ```bash
 # Run linter (ruff)
-pixi run ruff check src/polaris_generalization
+pixi run -e lint ruff check src/polaris_generalization
 
 # Run formatter
-pixi run ruff format src/polaris_generalization
+pixi run -e lint ruff format src/polaris_generalization
 
 # Run tests
-pixi run pytest
+pixi run -e test pytest
 ```
 
 ## Architecture
@@ -42,22 +48,35 @@ This is a generalization evaluation framework for molecular ML, analyzing how mo
 
 ### Key Components
 
-1. **Source Package** (`src/polaris_generalization/`): Modules for:
+1. **Source Package** (`src/polaris_generalization/`): Shared modules:
    - `config.py`: Centralized path definitions using pathlib
-   - `visualization.py`: Shared plotting utilities
-   - Future modules: dataset_analysis, splitting, distance_metrics, evaluation
+   - `visualization.py`: Plotting utilities — `set_style()`, `DEFAULT_DPI`, `MODEL_COLORS`, `MODEL_LABELS`, `plot_model_comparison_bars()`
+   - `tuning.py`: Optuna TPE XGBoost hyperparameter tuning with JSON caching (`tune_xgboost`)
+   - `chemprop_utils.py`: Chemprop D-MPNN training with prediction caching (`train_chemprop`)
 
 2. **Notebooks** (`notebooks/`): Analysis notebooks following phase-based naming
    - Convention: `<phase>.<sequence>-<initials>-<description>.py`
    - Phases: 0 = exploration, 1 = data loading, 2 = analysis, 3 = figures
+   - All modeling notebooks support `--model xgboost|chemprop` and `--combined` flags
 
 3. **Data Organization** (cookiecutter data science):
-   - `data/external/`: External datasets (Expansion Tx ADMET data)
+   - `data/external/`: External datasets
    - `data/raw/`: Original immutable data
-   - `data/interim/`: Intermediate transformed data
-   - `data/processed/`: Final analysis outputs
+   - `data/interim/`: Intermediate data — CV folds, Tanimoto matrix, `optuna_cache/`, `chemprop_pred_cache/`
+   - `data/processed/`: Analysis outputs, organized as `{notebook}/{model}/` with a `combined/` subdirectory
 
 4. **Configuration** (`configs/`): Model and experiment configuration files
+
+### Modeling: XGBoost vs Chemprop
+
+Every modeling notebook (2.07–2.15) supports two model backends:
+
+- **XGBoost** (`--model xgboost`, default): ECFP4 (2048-bit) + ~200 RDKit 2D descriptors, Optuna TPE-tuned per endpoint. Hyperparameters cached as JSON in `data/interim/optuna_cache/`.
+- **Chemprop** (`--model chemprop`): D-MPNN trained directly on protonated SMILES, default hyperparameters (hidden_dim=300, depth=3, 50 epochs). Predictions cached as `.npy` in `data/interim/chemprop_pred_cache/`.
+
+Both models use dimorphite_dl protonation at assay-relevant pH before training. Log-transform protocol (`log10(clip(x, 1e-10) + 1)`) applies to all endpoints except LogD for both models.
+
+Outputs go to `data/processed/{notebook}/{model}/` with shared figure helpers in `visualization.py`. Running `--combined` generates side-by-side comparison figures in `data/processed/{notebook}/combined/`.
 
 ### Dataset
 
@@ -91,9 +110,13 @@ Download: `pixi run download` (also auto-runs on cheminformatics env activation)
 
 ## Quick Reference
 
-- `docs/paper/`: Paper outline, analysis checklist, and planning documents
+- `docs/paper/`: Paper outline and analysis checklist (source of truth for analysis status)
 - `docs/decisions/`: Decision records for significant technical choices
 - `scripts/`: Shell scripts and pipeline orchestration
-- `notebooks/`: All Python analysis (use phase 0: `0.xx-seal-description.py` for exploration)
+- `notebooks/`: All Python analysis
+  - Phase 0: exploration (`0.01`, `0.02`, `0.03`)
+  - Phase 1: data loading (`1.01`)
+  - Phase 2: analysis (`2.01`–`2.16`)
+  - Phase 3: figures (`3.02`)
 - Always use the typer library for argument parsing
-- When running python, always use `pixi run python`
+- When running python, always use `pixi run -e cheminformatics python` for any notebook

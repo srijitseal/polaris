@@ -3,25 +3,30 @@
 
 Takes two large Butina clusters (chemical series), time-splits the largest
 into train + IID validation, uses the smaller cluster as OOD test set, trains
-default XGBoost models, and compares squared error intra-series (IID) vs
-inter-series (OOD). Demonstrates that chemical series + time-split uniquely
-enable this analysis.
+XGBoost or Chemprop D-MPNN models, and compares squared error intra-series
+(IID) vs inter-series (OOD). Demonstrates that chemical series + time-split
+uniquely enable this analysis.
 
 Usage:
     pixi run -e cheminformatics python notebooks/2.09-seal-iid-vs-ood-series.py
+    pixi run -e cheminformatics python notebooks/2.09-seal-iid-vs-ood-series.py --model chemprop
+    pixi run -e cheminformatics python notebooks/2.09-seal-iid-vs-ood-series.py --combined
 
-Outputs:
-    data/processed/2.09-seal-iid-vs-ood-series/iid_vs_ood_errors.csv
-    data/processed/2.09-seal-iid-vs-ood-series/summary_metrics.csv
+Outputs (per model):
+    data/processed/2.09-seal-iid-vs-ood-series/{model}/iid_vs_ood_errors.csv
+    data/processed/2.09-seal-iid-vs-ood-series/{model}/summary_metrics.csv
+    data/processed/2.09-seal-iid-vs-ood-series/{model}/squared_error_distributions.png
+    data/processed/2.09-seal-iid-vs-ood-series/{model}/squared_error_distributions_v2.png
+    data/processed/2.09-seal-iid-vs-ood-series/{model}/median_se_by_endpoint.png
+    data/processed/2.09-seal-iid-vs-ood-series/{model}/mae_by_endpoint.png
+    data/processed/2.09-seal-iid-vs-ood-series/{model}/r2_by_endpoint.png
+    data/processed/2.09-seal-iid-vs-ood-series/{model}/spearman_by_endpoint.png
+    data/processed/2.09-seal-iid-vs-ood-series/{model}/kendall_by_endpoint.png
+    data/processed/2.09-seal-iid-vs-ood-series/{model}/rae_by_endpoint.png
+
+Model-agnostic outputs:
     data/processed/2.09-seal-iid-vs-ood-series/split_summary.csv
-    data/processed/2.09-seal-iid-vs-ood-series/squared_error_distributions.png
     data/processed/2.09-seal-iid-vs-ood-series/distance_characterization.png
-    data/processed/2.09-seal-iid-vs-ood-series/median_se_by_endpoint.png
-    data/processed/2.09-seal-iid-vs-ood-series/mae_by_endpoint.png
-    data/processed/2.09-seal-iid-vs-ood-series/r2_by_endpoint.png
-    data/processed/2.09-seal-iid-vs-ood-series/spearman_by_endpoint.png
-    data/processed/2.09-seal-iid-vs-ood-series/kendall_by_endpoint.png
-    data/processed/2.09-seal-iid-vs-ood-series/rae_by_endpoint.png
 """
 
 from pathlib import Path
@@ -40,9 +45,14 @@ from scipy.stats import kendalltau, spearmanr
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.preprocessing import StandardScaler
 
+from polaris_generalization.chemprop_utils import train_chemprop
 from polaris_generalization.config import INTERIM_DATA_DIR, PROCESSED_DATA_DIR
 from polaris_generalization.tuning import tune_xgboost
-from polaris_generalization.visualization import DEFAULT_DPI, set_style
+from polaris_generalization.visualization import (
+    DEFAULT_DPI,
+    plot_model_comparison_bars,
+    set_style,
+)
 
 RDLogger.DisableLog("rdApp.*")
 
@@ -189,6 +199,150 @@ def plot_squared_error_distributions(errors_df: pd.DataFrame, metrics_df: pd.Dat
     plt.close("all")
 
 
+def _migrate_flat_outputs(output_dir: Path) -> None:
+    """Move pre-model-flag XGBoost outputs into xgboost/ subdirectory."""
+    flat_files = [
+        "iid_vs_ood_errors.csv", "summary_metrics.csv",
+        "squared_error_distributions.png", "squared_error_distributions_v2.png",
+        "median_se_by_endpoint.png", "mae_by_endpoint.png", "r2_by_endpoint.png",
+        "spearman_by_endpoint.png", "kendall_by_endpoint.png", "rae_by_endpoint.png",
+    ]
+    xgboost_dir = output_dir / "xgboost"
+    migrated = []
+    for fname in flat_files:
+        src = output_dir / fname
+        dst = xgboost_dir / fname
+        if src.exists() and not dst.exists():
+            xgboost_dir.mkdir(parents=True, exist_ok=True)
+            src.rename(dst)
+            migrated.append(fname)
+    if migrated:
+        logger.info(f"Migrated {len(migrated)} existing files → xgboost/")
+
+
+def _generate_figures(errors_df: pd.DataFrame, metrics_df: pd.DataFrame,
+                      model_dir: Path, dpi: int) -> None:
+    """Generate all per-model figures."""
+    active_endpoints = sorted(metrics_df["endpoint"].unique())
+    n_ep = len(active_endpoints)
+
+    plot_squared_error_distributions(errors_df, metrics_df, model_dir, dpi)
+
+    # Figure A: Squared error distributions (3×3 grid)
+    nrows = (n_ep + 2) // 3
+    ncols = min(n_ep, 3)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 4 * nrows))
+    axes = np.atleast_2d(axes).ravel()
+
+    for ax_idx, ep in enumerate(active_endpoints):
+        ax = axes[ax_idx]
+        iid_se = errors_df[(errors_df["endpoint"] == ep) & (errors_df["set"] == "iid")]["squared_error"]
+        ood_se = errors_df[(errors_df["endpoint"] == ep) & (errors_df["set"] == "ood")]["squared_error"]
+
+        all_se = np.concatenate([iid_se.values, ood_se.values])
+        lo = max(all_se.min(), 1e-8)
+        hi = all_se.max()
+        bins = np.logspace(np.log10(lo), np.log10(hi), 40)
+
+        ax.hist(iid_se, bins=bins, density=True, alpha=0.6, color="steelblue",
+                label=f"IID (med={np.median(iid_se):.3f})", edgecolor="white")
+        ax.hist(ood_se, bins=bins, density=True, alpha=0.6, color="coral",
+                label=f"OOD (med={np.median(ood_se):.3f})", edgecolor="white")
+
+        ax.set_xscale("log")
+        ax.set_xlabel("Squared error")
+        ax.set_ylabel("Density")
+        ax.set_title(ep, fontsize=10, fontweight="bold")
+        ax.legend(fontsize=7)
+
+    for i in range(n_ep, len(axes)):
+        axes[i].set_visible(False)
+
+    fig.suptitle("IID vs OOD squared error distributions", fontsize=14, y=1.01)
+    fig.tight_layout()
+    fig.savefig(model_dir / "squared_error_distributions.png", dpi=dpi, bbox_inches="tight")
+    logger.info("Saved squared_error_distributions.png")
+    plt.close("all")
+
+    # Figure B: Per-metric IID vs OOD bar charts
+    x = np.arange(len(active_endpoints))
+    width = 0.35
+
+    metric_plots = [
+        ("median_se", "Median squared error", "median_se"),
+        ("mae", "MAE", "mae"),
+        ("r2", "R²", "r2"),
+        ("spearman_r", "Spearman ρ", "spearman"),
+        ("kendall_tau", "Kendall τ", "kendall"),
+        ("rae", "RAE", "rae"),
+    ]
+
+    for col, ylabel, fname in metric_plots:
+        fig, ax = plt.subplots(figsize=(10, 5))
+
+        iid_vals = []
+        ood_vals = []
+        for ep in active_endpoints:
+            iid_row = metrics_df[(metrics_df["endpoint"] == ep) & (metrics_df["set"] == "iid")]
+            ood_row = metrics_df[(metrics_df["endpoint"] == ep) & (metrics_df["set"] == "ood")]
+            iid_vals.append(iid_row[col].values[0])
+            ood_vals.append(ood_row[col].values[0])
+
+        ax.bar(x - width / 2, iid_vals, width, label="IID",
+               color="steelblue", edgecolor="white", alpha=0.8)
+        ax.bar(x + width / 2, ood_vals, width, label="OOD",
+               color="coral", edgecolor="white", alpha=0.8)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(active_endpoints, rotation=45, ha="right", fontsize=8)
+        ax.set_ylabel(ylabel)
+        ax.set_title(f"IID vs OOD {ylabel} by endpoint")
+        ax.legend()
+        if col in ("r2",):
+            ax.axhline(y=0, color="gray", linestyle="--", alpha=0.3)
+        fig.tight_layout()
+        fig.savefig(model_dir / f"{fname}_by_endpoint.png", dpi=dpi, bbox_inches="tight")
+        logger.info(f"Saved {fname}_by_endpoint.png")
+        plt.close("all")
+
+
+def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
+    """Load both models' metrics and produce side-by-side comparison figures."""
+    xgb_path = output_dir / "xgboost" / "summary_metrics.csv"
+    chemprop_path = output_dir / "chemprop" / "summary_metrics.csv"
+
+    missing = [m for m, p in [("xgboost", xgb_path), ("chemprop", chemprop_path)] if not p.exists()]
+    if missing:
+        logger.error(f"Missing results for: {missing}. Run those models first.")
+        return
+
+    combined_dir = output_dir / "combined"
+    combined_dir.mkdir(parents=True, exist_ok=True)
+
+    xgb = pd.read_csv(xgb_path)
+    chemprop = pd.read_csv(chemprop_path)
+
+    for set_label in ("iid", "ood"):
+        xgb_set = xgb[xgb["set"] == set_label].copy()
+        chemprop_set = chemprop[chemprop["set"] == set_label].copy()
+        data_by_model = {"xgboost": xgb_set, "chemprop": chemprop_set}
+
+        for metric, ylabel, fname in [
+            ("mae", "MAE", "mae"),
+            ("r2", "R²", "r2"),
+            ("spearman_r", "Spearman ρ", "spearman"),
+            ("rae", "RAE", "rae"),
+        ]:
+            plot_model_comparison_bars(
+                data_by_model, "endpoint", metric, ylabel,
+                f"{ylabel} — XGBoost vs Chemprop ({set_label.upper()})",
+                combined_dir / f"{fname}_{set_label}_comparison.png", dpi=dpi,
+            )
+            logger.info(f"Saved {fname}_{set_label}_comparison.png")
+
+    logger.info(f"Combined figures saved to {combined_dir}")
+
+
 @app.command()
 def main(
     output_dir: Path = typer.Option(
@@ -196,17 +350,33 @@ def main(
     ),
     dpi: int = typer.Option(DEFAULT_DPI, help="DPI for saved figures"),
     train_frac: float = typer.Option(0.8, help="Fraction of largest cluster for training (rest = IID val)"),
-    figures_only: bool = typer.Option(False, help="Regenerate figures from existing data without retraining"),
+    model: str = typer.Option("xgboost", help="Model architecture: xgboost or chemprop"),
+    combined: bool = typer.Option(False, help="Generate combined XGBoost+Chemprop comparison figures"),
 ) -> None:
     set_style()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Figures-only mode ─────────────────────────────────────────────
-    if figures_only:
-        logger.info("Figures-only mode: loading existing data")
-        errors_df = pd.read_csv(output_dir / "iid_vs_ood_errors.csv")
-        metrics_df = pd.read_csv(output_dir / "summary_metrics.csv")
-        plot_squared_error_distributions(errors_df, metrics_df, output_dir, dpi)
+    if combined:
+        _generate_combined_figures(output_dir, dpi)
+        return
+
+    if model not in ("xgboost", "chemprop"):
+        logger.error(f"Unknown model: {model}. Choose xgboost or chemprop.")
+        raise typer.Exit(1)
+
+    _migrate_flat_outputs(output_dir)
+
+    model_dir = output_dir / model
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    # Skip training if outputs already exist
+    errors_path = model_dir / "iid_vs_ood_errors.csv"
+    metrics_path = model_dir / "summary_metrics.csv"
+    if errors_path.exists() and metrics_path.exists():
+        logger.info(f"Existing {model} outputs found — regenerating figures only")
+        errors_df = pd.read_csv(errors_path)
+        metrics_df = pd.read_csv(metrics_path)
+        _generate_figures(errors_df, metrics_df, model_dir, dpi)
         logger.info("Figures regenerated (no models retrained)")
         return
 
@@ -265,7 +435,7 @@ def main(
 
     logger.info(f"IID 1-NN median: {np.median(iid_nn1):.3f}, OOD 1-NN median: {np.median(ood_nn1):.3f}")
 
-    # Save split summary
+    # Save split summary (model-agnostic)
     split_summary = pd.DataFrame([
         {"set": "train", "n": len(train_df), "cluster_id": int(largest_cid)},
         {"set": "iid", "n": len(iid_df), "cluster_id": int(largest_cid),
@@ -276,49 +446,70 @@ def main(
     split_summary.to_csv(output_dir / "split_summary.csv", index=False)
     logger.info("Saved split_summary.csv")
 
-    # ── 5. Train XGBoost per endpoint and collect errors ──────────────
-    error_rows = []
-    metric_rows = []
+    # Distance characterization figure (model-agnostic)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    bins = np.linspace(0, 1, 51)
+    ax.hist(iid_nn1, bins=bins, density=True, alpha=0.6, color="steelblue",
+            label=f"IID (med={np.median(iid_nn1):.3f})", edgecolor="white")
+    ax.hist(ood_nn1, bins=bins, density=True, alpha=0.6, color="coral",
+            label=f"OOD (med={np.median(ood_nn1):.3f})", edgecolor="white")
+    ax.set_xlabel("Test-to-train 1-NN Tanimoto distance")
+    ax.set_ylabel("Density")
+    ax.set_title("Structural distance to training set: IID vs OOD")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(output_dir / "distance_characterization.png", dpi=dpi, bbox_inches="tight")
+    logger.info("Saved distance_characterization.png")
+    plt.close("all")
 
-    # Precompute features per pH (protonation differs by pH)
+    # ── 5. Protonation and featurization ─────────────────────────────
     unique_phs = sorted(set(ENDPOINT_PH.values()))
     features_cache: dict[float, dict[str, tuple]] = {}
+    prot_cache: dict[float, dict[str, list[str]]] = {}
 
     for ph in unique_phs:
-        logger.info(f"Protonating and featurizing at pH {ph}")
+        logger.info(f"Protonating at pH {ph}")
         train_prot = protonate_at_ph(train_df["SMILES"].tolist(), ph)
         iid_prot = protonate_at_ph(iid_df["SMILES"].tolist(), ph)
         ood_prot = protonate_at_ph(ood_df["SMILES"].tolist(), ph)
 
-        ecfp_tr, desc_tr = compute_features(train_prot)
-        ecfp_iid, desc_iid = compute_features(iid_prot)
-        ecfp_ood, desc_ood = compute_features(ood_prot)
+        prot_cache[ph] = {"train": train_prot, "iid": iid_prot, "ood": ood_prot}
 
-        # Remove zero-variance descriptors (fit on train)
-        variance = desc_tr.var(axis=0)
-        nonzero_var = variance > 0
-        desc_tr = desc_tr[:, nonzero_var]
-        desc_iid = desc_iid[:, nonzero_var]
-        desc_ood = desc_ood[:, nonzero_var]
+        if model == "xgboost":
+            logger.info(f"Computing XGBoost features at pH {ph}")
+            ecfp_tr, desc_tr = compute_features(train_prot)
+            ecfp_iid, desc_iid = compute_features(iid_prot)
+            ecfp_ood, desc_ood = compute_features(ood_prot)
 
-        # Scale descriptors
-        scaler = StandardScaler()
-        desc_tr_scaled = scaler.fit_transform(desc_tr)
-        desc_iid_scaled = scaler.transform(desc_iid)
-        desc_ood_scaled = scaler.transform(desc_ood)
+            # Remove zero-variance descriptors (fit on train)
+            variance = desc_tr.var(axis=0)
+            nonzero_var = variance > 0
+            desc_tr = desc_tr[:, nonzero_var]
+            desc_iid = desc_iid[:, nonzero_var]
+            desc_ood = desc_ood[:, nonzero_var]
 
-        features_cache[ph] = {
-            "train": (ecfp_tr, desc_tr_scaled),
-            "iid": (ecfp_iid, desc_iid_scaled),
-            "ood": (ecfp_ood, desc_ood_scaled),
-        }
-        logger.info(f"  pH {ph}: {ecfp_tr.shape[1] + desc_tr.shape[1]} features")
+            # Scale descriptors
+            scaler = StandardScaler()
+            desc_tr_scaled = scaler.fit_transform(desc_tr)
+            desc_iid_scaled = scaler.transform(desc_iid)
+            desc_ood_scaled = scaler.transform(desc_ood)
+
+            features_cache[ph] = {
+                "train": (ecfp_tr, desc_tr_scaled),
+                "iid": (ecfp_iid, desc_iid_scaled),
+                "ood": (ecfp_ood, desc_ood_scaled),
+            }
+            logger.info(f"  pH {ph}: {ecfp_tr.shape[1] + desc_tr_scaled.shape[1]} features")
+
+    # ── 6. Train model per endpoint and collect errors ────────────────
+    error_rows = []
+    metric_rows = []
+
+    optuna_cache = INTERIM_DATA_DIR / "optuna_cache"
+    chemprop_cache = INTERIM_DATA_DIR / "chemprop_pred_cache"
 
     for ep in ENDPOINTS:
         ph = ENDPOINT_PH[ep]
-        ecfp_tr, desc_tr = features_cache[ph]["train"]
-        ecfp_iid, desc_iid = features_cache[ph]["iid"]
-        ecfp_ood, desc_ood = features_cache[ph]["ood"]
 
         # Masks for non-null endpoint values
         train_mask = train_df[ep].notna().values
@@ -332,10 +523,6 @@ def main(
         if n_tr < 20 or n_iid < 10 or n_ood < 10:
             logger.warning(f"Skipping {ep}: insufficient data (train={n_tr}, iid={n_iid}, ood={n_ood})")
             continue
-
-        X_tr = np.hstack([ecfp_tr[train_mask], desc_tr[train_mask]])
-        X_iid = np.hstack([ecfp_iid[iid_mask], desc_iid[iid_mask]])
-        X_ood = np.hstack([ecfp_ood[ood_mask], desc_ood[ood_mask]])
 
         y_tr_raw = train_df[ep].values[train_mask]
         y_iid_raw = iid_df[ep].values[iid_mask]
@@ -352,11 +539,39 @@ def main(
 
         logger.info(f"  {ep}: train={n_tr}, iid={n_iid}, ood={n_ood}")
 
-        cache_dir = INTERIM_DATA_DIR / "optuna_cache"
-        model, _, _ = tune_xgboost(X_tr, y_tr, cache_dir=cache_dir, cache_key=f"{ep}_iid_ood")
+        if model == "xgboost":
+            ecfp_tr, desc_tr = features_cache[ph]["train"]
+            ecfp_iid, desc_iid = features_cache[ph]["iid"]
+            ecfp_ood, desc_ood = features_cache[ph]["ood"]
 
-        y_pred_iid = model.predict(X_iid)
-        y_pred_ood = model.predict(X_ood)
+            X_tr = np.hstack([ecfp_tr[train_mask], desc_tr[train_mask]])
+            X_iid = np.hstack([ecfp_iid[iid_mask], desc_iid[iid_mask]])
+            X_ood = np.hstack([ecfp_ood[ood_mask], desc_ood[ood_mask]])
+
+            model_obj, _, _ = tune_xgboost(X_tr, y_tr, cache_dir=optuna_cache, cache_key=f"{ep}_iid_ood")
+            y_pred_iid = model_obj.predict(X_iid)
+            y_pred_ood = model_obj.predict(X_ood)
+        else:
+            all_train_prot = prot_cache[ph]["train"]
+            all_iid_prot = prot_cache[ph]["iid"]
+            all_ood_prot = prot_cache[ph]["ood"]
+
+            train_prot = [all_train_prot[i] for i in np.where(train_mask)[0]]
+            iid_prot = [all_iid_prot[i] for i in np.where(iid_mask)[0]]
+            ood_prot = [all_ood_prot[i] for i in np.where(ood_mask)[0]]
+
+            y_pred_iid = train_chemprop(
+                train_prot, y_tr, iid_prot,
+                cache_dir=chemprop_cache,
+                cache_key=f"2.09_{ep}_iid_ood_iid",
+                checkpoint_dir=model_dir / "models",
+            )
+            y_pred_ood = train_chemprop(
+                train_prot, y_tr, ood_prot,
+                cache_dir=chemprop_cache,
+                cache_key=f"2.09_{ep}_iid_ood_ood",
+                checkpoint_dir=model_dir / "models",
+            )
 
         se_iid = (y_iid - y_pred_iid) ** 2
         se_ood = (y_ood - y_pred_ood) ** 2
@@ -402,107 +617,13 @@ def main(
     errors_df = pd.DataFrame(error_rows)
     metrics_df = pd.DataFrame(metric_rows)
 
-    errors_df.to_csv(output_dir / "iid_vs_ood_errors.csv", index=False)
-    metrics_df.to_csv(output_dir / "summary_metrics.csv", index=False)
+    errors_df.to_csv(errors_path, index=False)
+    metrics_df.to_csv(metrics_path, index=False)
     logger.info("Saved iid_vs_ood_errors.csv and summary_metrics.csv")
 
-    # ── 6. Figure A: Squared error distributions (3×3 grid) ───────────
-    active_endpoints = sorted(metrics_df["endpoint"].unique())
-    n_ep = len(active_endpoints)
-    nrows = (n_ep + 2) // 3
-    ncols = min(n_ep, 3)
-    fig, axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 4 * nrows))
-    axes = np.atleast_2d(axes).ravel()
-
-    for ax_idx, ep in enumerate(active_endpoints):
-        ax = axes[ax_idx]
-        iid_se = errors_df[(errors_df["endpoint"] == ep) & (errors_df["set"] == "iid")]["squared_error"]
-        ood_se = errors_df[(errors_df["endpoint"] == ep) & (errors_df["set"] == "ood")]["squared_error"]
-
-        # Use log-scale bins for squared errors
-        all_se = np.concatenate([iid_se.values, ood_se.values])
-        lo = max(all_se.min(), 1e-8)
-        hi = all_se.max()
-        bins = np.logspace(np.log10(lo), np.log10(hi), 40)
-
-        ax.hist(iid_se, bins=bins, density=True, alpha=0.6, color="steelblue",
-                label=f"IID (med={np.median(iid_se):.3f})", edgecolor="white")
-        ax.hist(ood_se, bins=bins, density=True, alpha=0.6, color="coral",
-                label=f"OOD (med={np.median(ood_se):.3f})", edgecolor="white")
-
-        ax.set_xscale("log")
-        ax.set_xlabel("Squared error")
-        ax.set_ylabel("Density")
-        ax.set_title(ep, fontsize=10, fontweight="bold")
-        ax.legend(fontsize=7)
-
-    for i in range(n_ep, len(axes)):
-        axes[i].set_visible(False)
-
-    fig.suptitle("IID vs OOD squared error distributions", fontsize=14, y=1.01)
-    fig.tight_layout()
-    fig.savefig(output_dir / "squared_error_distributions.png", dpi=dpi, bbox_inches="tight")
-    logger.info("Saved squared_error_distributions.png")
-    plt.close("all")
-
-    # ── 7. Figure B: Distance characterization ────────────────────────
-    fig, ax = plt.subplots(figsize=(8, 5))
-    bins = np.linspace(0, 1, 51)
-    ax.hist(iid_nn1, bins=bins, density=True, alpha=0.6, color="steelblue",
-            label=f"IID (med={np.median(iid_nn1):.3f})", edgecolor="white")
-    ax.hist(ood_nn1, bins=bins, density=True, alpha=0.6, color="coral",
-            label=f"OOD (med={np.median(ood_nn1):.3f})", edgecolor="white")
-    ax.set_xlabel("Test-to-train 1-NN Tanimoto distance")
-    ax.set_ylabel("Density")
-    ax.set_title("Structural distance to training set: IID vs OOD")
-    ax.legend()
-    fig.tight_layout()
-    fig.savefig(output_dir / "distance_characterization.png", dpi=dpi, bbox_inches="tight")
-    logger.info("Saved distance_characterization.png")
-    plt.close("all")
-
-    # ── 8. Figure C: Per-metric IID vs OOD bar charts ───────────────
-    x = np.arange(len(active_endpoints))
-    width = 0.35
-
-    metric_plots = [
-        ("median_se", "Median squared error", "median_se"),
-        ("mae", "MAE", "mae"),
-        ("r2", "R²", "r2"),
-        ("spearman_r", "Spearman ρ", "spearman"),
-        ("kendall_tau", "Kendall τ", "kendall"),
-        ("rae", "RAE", "rae"),
-    ]
-
-    for col, ylabel, fname in metric_plots:
-        fig, ax = plt.subplots(figsize=(10, 5))
-
-        iid_vals = []
-        ood_vals = []
-        for ep in active_endpoints:
-            iid_row = metrics_df[(metrics_df["endpoint"] == ep) & (metrics_df["set"] == "iid")]
-            ood_row = metrics_df[(metrics_df["endpoint"] == ep) & (metrics_df["set"] == "ood")]
-            iid_vals.append(iid_row[col].values[0])
-            ood_vals.append(ood_row[col].values[0])
-
-        ax.bar(x - width / 2, iid_vals, width, label="IID",
-               color="steelblue", edgecolor="white", alpha=0.8)
-        ax.bar(x + width / 2, ood_vals, width, label="OOD",
-               color="coral", edgecolor="white", alpha=0.8)
-
-        ax.set_xticks(x)
-        ax.set_xticklabels(active_endpoints, rotation=45, ha="right", fontsize=8)
-        ax.set_ylabel(ylabel)
-        ax.set_title(f"IID vs OOD {ylabel} by endpoint")
-        ax.legend()
-        if col in ("r2",):
-            ax.axhline(y=0, color="gray", linestyle="--", alpha=0.3)
-        fig.tight_layout()
-        fig.savefig(output_dir / f"{fname}_by_endpoint.png", dpi=dpi, bbox_inches="tight")
-        logger.info(f"Saved {fname}_by_endpoint.png")
-        plt.close("all")
-
-    logger.info(f"All outputs saved to {output_dir}")
+    # ── 7. Figures ────────────────────────────────────────────────────
+    _generate_figures(errors_df, metrics_df, model_dir, dpi)
+    logger.info(f"All outputs saved to {model_dir}")
 
 
 if __name__ == "__main__":

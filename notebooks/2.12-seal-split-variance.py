@@ -8,17 +8,22 @@ intervals rather than single point estimates.
 
 Usage:
     pixi run -e cheminformatics python notebooks/2.12-seal-split-variance.py
+    pixi run -e cheminformatics python notebooks/2.12-seal-split-variance.py --model chemprop
+    pixi run -e cheminformatics python notebooks/2.12-seal-split-variance.py --combined
 
-Outputs:
-    data/processed/2.12-seal-split-variance/summary_metrics.csv
-    data/processed/2.12-seal-split-variance/repeat_aggregates.csv
-    data/processed/2.12-seal-split-variance/variance_summary.csv
-    data/processed/2.12-seal-split-variance/mannwhitney_rae_tests.csv
-    data/processed/2.12-seal-split-variance/rae_distributions.png
-    data/processed/2.12-seal-split-variance/r2_distributions.png
-    data/processed/2.12-seal-split-variance/ma_rae_distribution.png
-    data/processed/2.12-seal-split-variance/variance_heatmap.png
-    data/processed/2.12-seal-split-variance/single_split_danger.png
+Outputs (per model, under data/processed/2.12-seal-split-variance/<model>/):
+    summary_metrics.csv
+    repeat_aggregates.csv
+    variance_summary.csv
+    mannwhitney_rae_tests.csv
+    rae_distributions.png
+    r2_distributions.png
+    ma_rae_distribution.png
+    variance_heatmap.png
+    single_split_danger.png
+
+Combined outputs (--combined):
+    data/processed/2.12-seal-split-variance/combined_*.png
 """
 
 from pathlib import Path
@@ -37,9 +42,14 @@ from scipy.stats import kendalltau, mannwhitneyu, spearmanr
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.preprocessing import StandardScaler
 
+from polaris_generalization.chemprop_utils import train_chemprop
 from polaris_generalization.config import INTERIM_DATA_DIR, PROCESSED_DATA_DIR
 from polaris_generalization.tuning import tune_xgboost
-from polaris_generalization.visualization import DEFAULT_DPI, set_style
+from polaris_generalization.visualization import (
+    DEFAULT_DPI,
+    plot_model_comparison_bars,
+    set_style,
+)
 
 RDLogger.DisableLog("rdApp.*")
 
@@ -122,199 +132,42 @@ def make_random_folds(n_molecules: int, n_folds: int = 5, seed: int = 0) -> np.n
     return rng.integers(0, n_folds, size=n_molecules)
 
 
-@app.command()
-def main(
-    output_dir: Path = typer.Option(
-        PROCESSED_DATA_DIR / "2.12-seal-split-variance", help="Output directory"
-    ),
-    dpi: int = typer.Option(DEFAULT_DPI, help="DPI for saved figures"),
-    n_random_repeats: int = typer.Option(5, help="Number of random split repeats"),
+def _migrate_flat_outputs(output_dir: Path) -> None:
+    """Move old flat XGBoost outputs into xgboost/ subdirectory."""
+    flat_files = [
+        "summary_metrics.csv",
+        "repeat_aggregates.csv",
+        "variance_summary.csv",
+        "mannwhitney_rae_tests.csv",
+        "rae_distributions.png",
+        "r2_distributions.png",
+        "ma_rae_distribution.png",
+        "variance_heatmap.png",
+        "single_split_danger.png",
+    ]
+    xgboost_dir = output_dir / "xgboost"
+    migrated = []
+    for fname in flat_files:
+        src = output_dir / fname
+        dst = xgboost_dir / fname
+        if src.exists() and not dst.exists():
+            xgboost_dir.mkdir(parents=True, exist_ok=True)
+            src.rename(dst)
+            migrated.append(fname)
+    if migrated:
+        logger.info(f"Migrated {len(migrated)} existing files → xgboost/")
+
+
+def _save_figures(
+    summary_df: pd.DataFrame,
+    repeat_agg: pd.DataFrame,
+    var_df: pd.DataFrame,
+    model_dir: Path,
+    dpi: int,
+    n_random_repeats: int,
+    n_cluster_repeats: int,
 ) -> None:
-    set_style()
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # ── 1. Load data ──────────────────────────────────────────────────
-    logger.info("Loading canonical dataset")
-    df = pd.read_parquet(INTERIM_DATA_DIR / "expansion_tx.parquet")
-    logger.info(f"Loaded {len(df)} molecules")
-
-    logger.info("Loading cluster CV folds (all 5 repeats)")
-    cluster_folds = pd.read_parquet(INTERIM_DATA_DIR / "cluster_cv_folds.parquet")
-    n_cluster_repeats = cluster_folds["repeat"].nunique()
-    logger.info(f"Cluster folds: {len(cluster_folds)} rows, {n_cluster_repeats} repeats")
-
-    # ── 2. Train and evaluate per strategy per repeat per endpoint ────
-    metric_rows = []
-
-    for ep in ENDPOINTS:
-        ph = ENDPOINT_PH[ep]
-        mask = df[ep].notna().values
-        ep_df = df[mask].copy()
-        n_mol = len(ep_df)
-
-        if n_mol < 50:
-            logger.warning(f"Skipping {ep}: only {n_mol} molecules")
-            continue
-
-        names = ep_df["Molecule Name"].values
-        smiles = ep_df["SMILES"].tolist()
-
-        # Activity values
-        raw_values = ep_df[ep].values
-        if ep in LOG_TRANSFORM_ENDPOINTS:
-            y_all = clip_and_log_transform(raw_values)
-        else:
-            y_all = raw_values
-
-        # Compute features once per endpoint (shared across all repeats)
-        prot_smiles = protonate_at_ph(smiles, ph)
-        ecfp = compute_ecfp4(prot_smiles)
-        desc = compute_rdkit_descriptors(prot_smiles)
-        variance = desc.var(axis=0)
-        desc = desc[:, variance > 0]
-        scaler = StandardScaler()
-        desc_scaled = scaler.fit_transform(desc)
-        X_all = np.hstack([ecfp, desc_scaled])
-
-        logger.info(f"  {ep} ({n_mol} molecules, {X_all.shape[1]} features)")
-
-        # ── Random repeats ────────────────────────────────────────────
-        for repeat in range(n_random_repeats):
-            fold_ids = make_random_folds(n_mol, n_folds=5, seed=repeat)
-            unique_folds = sorted(set(fold_ids))
-
-            for fold_id in unique_folds:
-                test_mask = fold_ids == fold_id
-                train_mask = ~test_mask
-
-                X_tr, y_tr = X_all[train_mask], y_all[train_mask]
-                X_te, y_te = X_all[test_mask], y_all[test_mask]
-
-                if len(y_te) < 10 or len(y_tr) < 10:
-                    continue
-
-                cache_dir = INTERIM_DATA_DIR / "optuna_cache"
-                model, _, _ = tune_xgboost(X_tr, y_tr, cache_dir=cache_dir, cache_key=f"{ep}_random_r{repeat}_fold{fold_id}")
-                y_pred = model.predict(X_te)
-
-                mae = mean_absolute_error(y_te, y_pred)
-                r2 = r2_score(y_te, y_pred)
-                sp_r, _ = spearmanr(y_te, y_pred)
-                kt, _ = kendalltau(y_te, y_pred)
-                baseline_mad = np.mean(np.abs(y_te - np.mean(y_te)))
-                rae = mae / baseline_mad if baseline_mad > 0 else np.nan
-
-                metric_rows.append({
-                    "endpoint": ep,
-                    "strategy": "random",
-                    "repeat": repeat,
-                    "fold": fold_id,
-                    "n_train": int(train_mask.sum()),
-                    "n_test": int(test_mask.sum()),
-                    "mae": mae,
-                    "r2": r2,
-                    "spearman_r": sp_r,
-                    "kendall_tau": kt,
-                    "rae": rae,
-                })
-
-        logger.info(f"    random: {n_random_repeats} repeats done")
-
-        # ── Cluster repeats ───────────────────────────────────────────
-        ep_cluster = cluster_folds[cluster_folds["endpoint"] == ep]
-
-        for repeat in range(n_cluster_repeats):
-            rep_folds = ep_cluster[ep_cluster["repeat"] == repeat]
-            fold_map = dict(zip(rep_folds["Molecule Name"], rep_folds["fold"]))
-            fold_ids = np.array([fold_map.get(n, -1) for n in names])
-            unique_folds = sorted(set(fold_ids[fold_ids >= 0]))
-
-            for fold_id in unique_folds:
-                test_mask = fold_ids == fold_id
-                train_mask = (fold_ids >= 0) & ~test_mask
-
-                X_tr, y_tr = X_all[train_mask], y_all[train_mask]
-                X_te, y_te = X_all[test_mask], y_all[test_mask]
-
-                if len(y_te) < 10 or len(y_tr) < 10:
-                    continue
-
-                model, _, _ = tune_xgboost(X_tr, y_tr, cache_dir=cache_dir, cache_key=f"{ep}_cluster_r{repeat}_fold{fold_id}")
-                y_pred = model.predict(X_te)
-
-                mae = mean_absolute_error(y_te, y_pred)
-                r2 = r2_score(y_te, y_pred)
-                sp_r, _ = spearmanr(y_te, y_pred)
-                kt, _ = kendalltau(y_te, y_pred)
-                baseline_mad = np.mean(np.abs(y_te - np.mean(y_te)))
-                rae = mae / baseline_mad if baseline_mad > 0 else np.nan
-
-                metric_rows.append({
-                    "endpoint": ep,
-                    "strategy": "cluster",
-                    "repeat": repeat,
-                    "fold": fold_id,
-                    "n_train": int(train_mask.sum()),
-                    "n_test": int(test_mask.sum()),
-                    "mae": mae,
-                    "r2": r2,
-                    "spearman_r": sp_r,
-                    "kendall_tau": kt,
-                    "rae": rae,
-                })
-
-        logger.info(f"    cluster: {n_cluster_repeats} repeats done")
-
-    # ── 3. Save per-fold metrics ──────────────────────────────────────
-    summary_df = pd.DataFrame(metric_rows)
-    summary_df.to_csv(output_dir / "summary_metrics.csv", index=False)
-    logger.info(f"Saved summary_metrics.csv ({len(summary_df)} rows)")
-
-    # ── 4. Per-repeat aggregates (mean across folds) ──────────────────
-    repeat_agg = (
-        summary_df.groupby(["endpoint", "strategy", "repeat"])
-        .agg(
-            mae_mean=("mae", "mean"),
-            r2_mean=("r2", "mean"),
-            spearman_r_mean=("spearman_r", "mean"),
-            kendall_tau_mean=("kendall_tau", "mean"),
-            rae_mean=("rae", "mean"),
-        )
-        .reset_index()
-    )
-    repeat_agg.to_csv(output_dir / "repeat_aggregates.csv", index=False)
-    logger.info(f"Saved repeat_aggregates.csv ({len(repeat_agg)} rows)")
-
-    # ── 5. Variance summary per endpoint per strategy ─────────────────
-    var_rows = []
-    for (ep, strategy), grp in repeat_agg.groupby(["endpoint", "strategy"]):
-        row = {"endpoint": ep, "strategy": strategy, "n_repeats": len(grp)}
-        for col in ["mae_mean", "r2_mean", "spearman_r_mean", "kendall_tau_mean", "rae_mean"]:
-            vals = grp[col].values
-            metric_name = col.replace("_mean", "")
-            row[f"{metric_name}_mean"] = np.mean(vals)
-            row[f"{metric_name}_std"] = np.std(vals)
-            row[f"{metric_name}_min"] = np.min(vals)
-            row[f"{metric_name}_max"] = np.max(vals)
-            row[f"{metric_name}_range"] = np.max(vals) - np.min(vals)
-            row[f"{metric_name}_cv"] = np.std(vals) / abs(np.mean(vals)) if np.mean(vals) != 0 else np.nan
-            # 95% CI (using t-distribution approximation for small n)
-            row[f"{metric_name}_ci95"] = 1.96 * np.std(vals) / np.sqrt(len(vals))
-        var_rows.append(row)
-
-    var_df = pd.DataFrame(var_rows)
-    var_df.to_csv(output_dir / "variance_summary.csv", index=False)
-    logger.info("Saved variance_summary.csv")
-
-    for _, row in var_df.iterrows():
-        logger.info(
-            f"  {row['endpoint']} ({row['strategy']}, n={row['n_repeats']}): "
-            f"RAE={row['rae_mean']:.3f}±{row['rae_std']:.3f} "
-            f"[{row['rae_min']:.3f}–{row['rae_max']:.3f}], "
-            f"R²={row['r2_mean']:.3f}±{row['r2_std']:.3f}"
-        )
-
-    # ── 6. Figure A: Per-endpoint RAE distributions ───────────────────
+    """Generate and save all per-model figures."""
     active_endpoints = sorted(repeat_agg["endpoint"].unique())
     n_ep = len(active_endpoints)
     nrows = (n_ep + 2) // 3
@@ -380,17 +233,16 @@ def main(
             fontsize=14, y=1.01,
         )
         fig.tight_layout()
-        fig.savefig(output_dir / f"{fig_name}.png", dpi=dpi, bbox_inches="tight")
+        fig.savefig(model_dir / f"{fig_name}.png", dpi=dpi, bbox_inches="tight")
         logger.info(f"Saved {fig_name}.png")
         plt.close("all")
 
-    # ── 7. Figure B: MA-RAE distribution across repeats ───────────────
+    # MA-RAE distribution across repeats
     fig, ax = plt.subplots(figsize=(8, 5))
 
     ma_rae_data = {}
     for strategy in STRATEGY_ORDER:
         strat_agg = repeat_agg[repeat_agg["strategy"] == strategy]
-        # MA-RAE per repeat: mean RAE across endpoints for each repeat
         ma_raes = strat_agg.groupby("repeat")["rae_mean"].mean().values
         ma_rae_data[strategy] = ma_raes
 
@@ -426,11 +278,11 @@ def main(
     ax.set_title("MA-RAE distribution across repeated splits", fontsize=13)
     ax.axhline(y=1, color="gray", linestyle="--", alpha=0.3)
     fig.tight_layout()
-    fig.savefig(output_dir / "ma_rae_distribution.png", dpi=dpi, bbox_inches="tight")
+    fig.savefig(model_dir / "ma_rae_distribution.png", dpi=dpi, bbox_inches="tight")
     logger.info("Saved ma_rae_distribution.png")
     plt.close("all")
 
-    # ── 8. Figure C: Variance summary heatmap ─────────────────────────
+    # Variance summary heatmap
     metric_cols = ["mae", "r2", "spearman_r", "rae"]
     metric_labels = ["MAE", "R²", "Spearman ρ", "RAE"]
 
@@ -456,12 +308,11 @@ def main(
 
     fig.suptitle("Metric variance (coefficient of variation) across repeated splits", fontsize=13, y=1.02)
     fig.tight_layout()
-    fig.savefig(output_dir / "variance_heatmap.png", dpi=dpi, bbox_inches="tight")
+    fig.savefig(model_dir / "variance_heatmap.png", dpi=dpi, bbox_inches="tight")
     logger.info("Saved variance_heatmap.png")
     plt.close("all")
 
-    # ── 9. Figure D: Single-split danger illustration ─────────────────
-    # Find endpoint with highest RAE range for cluster strategy
+    # Single-split danger illustration
     cluster_var = var_df[var_df["strategy"] == "cluster"]
     if not cluster_var.empty:
         worst_ep = cluster_var.loc[cluster_var["rae_range"].idxmax(), "endpoint"]
@@ -484,7 +335,6 @@ def main(
             color=STRATEGY_COLORS[strategy], edgecolor="white", alpha=0.8,
         )
 
-        # Highlight best and worst
         best_idx = np.argmin(vals)
         worst_idx = np.argmax(vals)
         ax.bar(best_idx, vals[best_idx], color="green", edgecolor="white", alpha=0.9)
@@ -512,11 +362,295 @@ def main(
         fontsize=13, y=1.02,
     )
     fig.tight_layout()
-    fig.savefig(output_dir / "single_split_danger.png", dpi=dpi, bbox_inches="tight")
+    fig.savefig(model_dir / "single_split_danger.png", dpi=dpi, bbox_inches="tight")
     logger.info("Saved single_split_danger.png")
     plt.close("all")
 
-    # ── 10. Mann-Whitney U tests: cluster vs random RAE ─────────────
+
+def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
+    """Load both models' variance_summary.csv and produce combined comparison figures."""
+    xgb_path = output_dir / "xgboost" / "variance_summary.csv"
+    chemprop_path = output_dir / "chemprop" / "variance_summary.csv"
+
+    missing = [p for p in [xgb_path, chemprop_path] if not p.exists()]
+    if missing:
+        logger.error(f"Cannot generate combined figures — missing: {[str(p) for p in missing]}")
+        return
+
+    xgb_df = pd.read_csv(xgb_path)
+    chemprop_df = pd.read_csv(chemprop_path)
+
+    metrics = [
+        ("mae_mean", "MAE"),
+        ("r2_mean", "R²"),
+        ("spearman_r_mean", "Spearman ρ"),
+        ("rae_mean", "RAE"),
+    ]
+
+    for strategy in STRATEGY_ORDER:
+        xgb_strat = xgb_df[xgb_df["strategy"] == strategy].copy()
+        chemprop_strat = chemprop_df[chemprop_df["strategy"] == strategy].copy()
+
+        if xgb_strat.empty and chemprop_strat.empty:
+            continue
+
+        for metric_col, ylabel in metrics:
+            out_path = output_dir / f"combined_{strategy}_{metric_col.replace('_mean', '')}.png"
+            plot_model_comparison_bars(
+                data_by_model={"xgboost": xgb_strat, "chemprop": chemprop_strat},
+                endpoint_col="endpoint",
+                metric_col=metric_col,
+                ylabel=ylabel,
+                title=f"{ylabel} variance ({strategy} split): XGBoost vs Chemprop",
+                output_path=out_path,
+                dpi=dpi,
+            )
+            logger.info(f"Saved {out_path.name}")
+
+    logger.info(f"Combined figures saved to {output_dir}")
+
+
+@app.command()
+def main(
+    output_dir: Path = typer.Option(
+        PROCESSED_DATA_DIR / "2.12-seal-split-variance", help="Output directory"
+    ),
+    dpi: int = typer.Option(DEFAULT_DPI, help="DPI for saved figures"),
+    n_random_repeats: int = typer.Option(5, help="Number of random split repeats"),
+    model: str = typer.Option("xgboost", help="Model architecture: xgboost or chemprop"),
+    combined: bool = typer.Option(False, help="Generate combined XGBoost+Chemprop comparison figures"),
+) -> None:
+    set_style()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if combined:
+        _generate_combined_figures(output_dir, dpi)
+        return
+
+    _migrate_flat_outputs(output_dir)
+    model_dir = output_dir / model
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── 1. Load data ──────────────────────────────────────────────────
+    logger.info("Loading canonical dataset")
+    df = pd.read_parquet(INTERIM_DATA_DIR / "expansion_tx.parquet")
+    logger.info(f"Loaded {len(df)} molecules")
+
+    logger.info("Loading cluster CV folds (all 5 repeats)")
+    cluster_folds = pd.read_parquet(INTERIM_DATA_DIR / "cluster_cv_folds.parquet")
+    n_cluster_repeats = cluster_folds["repeat"].nunique()
+    logger.info(f"Cluster folds: {len(cluster_folds)} rows, {n_cluster_repeats} repeats")
+
+    # Skip training if key outputs already exist
+    if (model_dir / "summary_metrics.csv").exists():
+        logger.info(f"Existing {model} outputs found — regenerating figures only")
+        summary_df = pd.read_csv(model_dir / "summary_metrics.csv")
+        repeat_agg = pd.read_csv(model_dir / "repeat_aggregates.csv")
+        var_df = pd.read_csv(model_dir / "variance_summary.csv")
+        _save_figures(summary_df, repeat_agg, var_df, model_dir, dpi, n_random_repeats, n_cluster_repeats)
+        logger.info(f"Figures regenerated in {model_dir}")
+        return
+
+    chemprop_cache = INTERIM_DATA_DIR / "chemprop_pred_cache"
+
+    # ── 2. Train and evaluate per strategy per repeat per endpoint ────
+    metric_rows = []
+
+    for ep in ENDPOINTS:
+        ph = ENDPOINT_PH[ep]
+        mask = df[ep].notna().values
+        ep_df = df[mask].copy()
+        n_mol = len(ep_df)
+
+        if n_mol < 50:
+            logger.warning(f"Skipping {ep}: only {n_mol} molecules")
+            continue
+
+        names = ep_df["Molecule Name"].values
+        smiles = ep_df["SMILES"].tolist()
+
+        # Activity values
+        raw_values = ep_df[ep].values
+        if ep in LOG_TRANSFORM_ENDPOINTS:
+            y_all = clip_and_log_transform(raw_values)
+        else:
+            y_all = raw_values
+
+        # Always: protonate (needed for both XGBoost and Chemprop)
+        prot_smiles = protonate_at_ph(smiles, ph)
+
+        # XGBoost only: feature computation (shared across all repeats)
+        if model == "xgboost":
+            ecfp = compute_ecfp4(prot_smiles)
+            desc = compute_rdkit_descriptors(prot_smiles)
+            variance = desc.var(axis=0)
+            desc = desc[:, variance > 0]
+            scaler = StandardScaler()
+            desc_scaled = scaler.fit_transform(desc)
+            X_all = np.hstack([ecfp, desc_scaled])
+            logger.info(f"  {ep} ({n_mol} molecules, {X_all.shape[1]} features)")
+        else:
+            logger.info(f"  {ep} ({n_mol} molecules)")
+
+        # ── Random repeats ────────────────────────────────────────────
+        cache_dir = INTERIM_DATA_DIR / "optuna_cache"
+        for repeat in range(n_random_repeats):
+            fold_ids = make_random_folds(n_mol, n_folds=5, seed=repeat)
+            unique_folds = sorted(set(fold_ids))
+
+            for fold_id in unique_folds:
+                test_mask = fold_ids == fold_id
+                train_mask = ~test_mask
+
+                y_tr = y_all[train_mask]
+                y_te = y_all[test_mask]
+
+                if len(y_te) < 10 or len(y_tr) < 10:
+                    continue
+
+                if model == "xgboost":
+                    X_tr, X_te = X_all[train_mask], X_all[test_mask]
+                    model_obj, _, _ = tune_xgboost(X_tr, y_tr, cache_dir=cache_dir, cache_key=f"{ep}_random_r{repeat}_fold{fold_id}")
+                    y_pred = model_obj.predict(X_te)
+                else:
+                    train_prot = [prot_smiles[i] for i in np.where(train_mask)[0]]
+                    test_prot = [prot_smiles[i] for i in np.where(test_mask)[0]]
+                    y_pred = train_chemprop(train_prot, y_tr, test_prot,
+                                           cache_dir=chemprop_cache,
+                                           cache_key=f"2.12_{ep}_random_r{repeat}_fold{fold_id}",
+                                           checkpoint_dir=model_dir / "models")
+
+                mae = mean_absolute_error(y_te, y_pred)
+                r2 = r2_score(y_te, y_pred)
+                sp_r, _ = spearmanr(y_te, y_pred)
+                kt, _ = kendalltau(y_te, y_pred)
+                baseline_mad = np.mean(np.abs(y_te - np.mean(y_te)))
+                rae = mae / baseline_mad if baseline_mad > 0 else np.nan
+
+                metric_rows.append({
+                    "endpoint": ep,
+                    "strategy": "random",
+                    "repeat": repeat,
+                    "fold": fold_id,
+                    "n_train": int(train_mask.sum()),
+                    "n_test": int(test_mask.sum()),
+                    "mae": mae,
+                    "r2": r2,
+                    "spearman_r": sp_r,
+                    "kendall_tau": kt,
+                    "rae": rae,
+                })
+
+        logger.info(f"    random: {n_random_repeats} repeats done")
+
+        # ── Cluster repeats ───────────────────────────────────────────
+        ep_cluster = cluster_folds[cluster_folds["endpoint"] == ep]
+
+        for repeat in range(n_cluster_repeats):
+            rep_folds = ep_cluster[ep_cluster["repeat"] == repeat]
+            fold_map = dict(zip(rep_folds["Molecule Name"], rep_folds["fold"]))
+            fold_ids = np.array([fold_map.get(n, -1) for n in names])
+            unique_folds = sorted(set(fold_ids[fold_ids >= 0]))
+
+            for fold_id in unique_folds:
+                test_mask = fold_ids == fold_id
+                train_mask = (fold_ids >= 0) & ~test_mask
+
+                y_tr = y_all[train_mask]
+                y_te = y_all[test_mask]
+
+                if len(y_te) < 10 or len(y_tr) < 10:
+                    continue
+
+                if model == "xgboost":
+                    X_tr, X_te = X_all[train_mask], X_all[test_mask]
+                    model_obj, _, _ = tune_xgboost(X_tr, y_tr, cache_dir=cache_dir, cache_key=f"{ep}_cluster_r{repeat}_fold{fold_id}")
+                    y_pred = model_obj.predict(X_te)
+                else:
+                    train_prot = [prot_smiles[i] for i in np.where(train_mask)[0]]
+                    test_prot = [prot_smiles[i] for i in np.where(test_mask)[0]]
+                    y_pred = train_chemprop(train_prot, y_tr, test_prot,
+                                           cache_dir=chemprop_cache,
+                                           cache_key=f"2.12_{ep}_cluster_r{repeat}_fold{fold_id}",
+                                           checkpoint_dir=model_dir / "models")
+
+                mae = mean_absolute_error(y_te, y_pred)
+                r2 = r2_score(y_te, y_pred)
+                sp_r, _ = spearmanr(y_te, y_pred)
+                kt, _ = kendalltau(y_te, y_pred)
+                baseline_mad = np.mean(np.abs(y_te - np.mean(y_te)))
+                rae = mae / baseline_mad if baseline_mad > 0 else np.nan
+
+                metric_rows.append({
+                    "endpoint": ep,
+                    "strategy": "cluster",
+                    "repeat": repeat,
+                    "fold": fold_id,
+                    "n_train": int(train_mask.sum()),
+                    "n_test": int(test_mask.sum()),
+                    "mae": mae,
+                    "r2": r2,
+                    "spearman_r": sp_r,
+                    "kendall_tau": kt,
+                    "rae": rae,
+                })
+
+        logger.info(f"    cluster: {n_cluster_repeats} repeats done")
+
+    # ── 3. Save per-fold metrics ──────────────────────────────────────
+    summary_df = pd.DataFrame(metric_rows)
+    summary_df.to_csv(model_dir / "summary_metrics.csv", index=False)
+    logger.info(f"Saved summary_metrics.csv ({len(summary_df)} rows)")
+
+    # ── 4. Per-repeat aggregates (mean across folds) ──────────────────
+    repeat_agg = (
+        summary_df.groupby(["endpoint", "strategy", "repeat"])
+        .agg(
+            mae_mean=("mae", "mean"),
+            r2_mean=("r2", "mean"),
+            spearman_r_mean=("spearman_r", "mean"),
+            kendall_tau_mean=("kendall_tau", "mean"),
+            rae_mean=("rae", "mean"),
+        )
+        .reset_index()
+    )
+    repeat_agg.to_csv(model_dir / "repeat_aggregates.csv", index=False)
+    logger.info(f"Saved repeat_aggregates.csv ({len(repeat_agg)} rows)")
+
+    # ── 5. Variance summary per endpoint per strategy ─────────────────
+    var_rows = []
+    for (ep, strategy), grp in repeat_agg.groupby(["endpoint", "strategy"]):
+        row = {"endpoint": ep, "strategy": strategy, "n_repeats": len(grp)}
+        for col in ["mae_mean", "r2_mean", "spearman_r_mean", "kendall_tau_mean", "rae_mean"]:
+            vals = grp[col].values
+            metric_name = col.replace("_mean", "")
+            row[f"{metric_name}_mean"] = np.mean(vals)
+            row[f"{metric_name}_std"] = np.std(vals)
+            row[f"{metric_name}_min"] = np.min(vals)
+            row[f"{metric_name}_max"] = np.max(vals)
+            row[f"{metric_name}_range"] = np.max(vals) - np.min(vals)
+            row[f"{metric_name}_cv"] = np.std(vals) / abs(np.mean(vals)) if np.mean(vals) != 0 else np.nan
+            # 95% CI (using t-distribution approximation for small n)
+            row[f"{metric_name}_ci95"] = 1.96 * np.std(vals) / np.sqrt(len(vals))
+        var_rows.append(row)
+
+    var_df = pd.DataFrame(var_rows)
+    var_df.to_csv(model_dir / "variance_summary.csv", index=False)
+    logger.info("Saved variance_summary.csv")
+
+    for _, row in var_df.iterrows():
+        logger.info(
+            f"  {row['endpoint']} ({row['strategy']}, n={row['n_repeats']}): "
+            f"RAE={row['rae_mean']:.3f}±{row['rae_std']:.3f} "
+            f"[{row['rae_min']:.3f}–{row['rae_max']:.3f}], "
+            f"R²={row['r2_mean']:.3f}±{row['r2_std']:.3f}"
+        )
+
+    # ── 6. Figures ────────────────────────────────────────────────────
+    _save_figures(summary_df, repeat_agg, var_df, model_dir, dpi, n_random_repeats, n_cluster_repeats)
+
+    # ── 7. Mann-Whitney U tests: cluster vs random RAE ─────────────
+    active_endpoints = sorted(repeat_agg["endpoint"].unique())
     logger.info("Computing Mann-Whitney U tests on per-repeat RAE (cluster vs random)")
 
     mw_rows = []
@@ -551,10 +685,10 @@ def main(
         )
 
     mw_df = pd.DataFrame(mw_rows)
-    mw_df.to_csv(output_dir / "mannwhitney_rae_tests.csv", index=False)
+    mw_df.to_csv(model_dir / "mannwhitney_rae_tests.csv", index=False)
     logger.info("Saved mannwhitney_rae_tests.csv")
 
-    logger.info(f"All outputs saved to {output_dir}")
+    logger.info(f"All outputs saved to {model_dir}")
 
 
 if __name__ == "__main__":

@@ -7,17 +7,25 @@ to cluster-based splitting (from 2.03) which produces genuine structural separat
 
 Usage:
     pixi run -e cheminformatics python notebooks/2.11-seal-scaffold-vs-random.py
+    pixi run -e cheminformatics python notebooks/2.11-seal-scaffold-vs-random.py --model chemprop
+    pixi run -e cheminformatics python notebooks/2.11-seal-scaffold-vs-random.py --combined
 
-Outputs:
-    data/processed/2.11-seal-scaffold-vs-random/summary_metrics.csv
-    data/processed/2.11-seal-scaffold-vs-random/aggregated_metrics.csv
-    data/processed/2.11-seal-scaffold-vs-random/distance_stats.csv
-    data/processed/2.11-seal-scaffold-vs-random/ks_distance_tests.csv
-    data/processed/2.11-seal-scaffold-vs-random/scaffold_group_stats.csv
-    data/processed/2.11-seal-scaffold-vs-random/scaffold_group_sizes.png
-    data/processed/2.11-seal-scaffold-vs-random/metric_comparison.png
-    data/processed/2.11-seal-scaffold-vs-random/distance_distributions.png
-    data/processed/2.11-seal-scaffold-vs-random/strategy_summary.png
+Outputs (per model, under data/processed/2.11-seal-scaffold-vs-random/<model>/):
+    summary_metrics.csv
+    aggregated_metrics.csv
+    distance_stats.csv
+    ks_distance_tests.csv
+    scaffold_group_stats.csv
+    metric_*.png
+    metric_comparison.png
+    distance_distributions.png
+    strategy_summary.png
+
+Model-agnostic outputs (directly in data/processed/2.11-seal-scaffold-vs-random/):
+    scaffold_group_sizes.png
+
+Combined outputs (--combined):
+    data/processed/2.11-seal-scaffold-vs-random/combined_*.png
 """
 
 from pathlib import Path
@@ -37,9 +45,14 @@ from scipy.stats import kendalltau, ks_2samp, spearmanr
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.preprocessing import StandardScaler
 
+from polaris_generalization.chemprop_utils import train_chemprop
 from polaris_generalization.config import INTERIM_DATA_DIR, PROCESSED_DATA_DIR
 from polaris_generalization.tuning import tune_xgboost
-from polaris_generalization.visualization import DEFAULT_DPI, set_style
+from polaris_generalization.visualization import (
+    DEFAULT_DPI,
+    plot_model_comparison_bars,
+    set_style,
+)
 
 RDLogger.DisableLog("rdApp.*")
 
@@ -170,195 +183,44 @@ def make_random_folds(n_molecules: int, n_folds: int = 5, seed: int = 42) -> np.
     return rng.integers(0, n_folds, size=n_molecules)
 
 
-@app.command()
-def main(
-    output_dir: Path = typer.Option(
-        PROCESSED_DATA_DIR / "2.11-seal-scaffold-vs-random", help="Output directory"
-    ),
-    dpi: int = typer.Option(DEFAULT_DPI, help="DPI for saved figures"),
+def _migrate_flat_outputs(output_dir: Path) -> None:
+    """Move old flat XGBoost outputs into xgboost/ subdirectory."""
+    flat_files = [
+        "summary_metrics.csv",
+        "aggregated_metrics.csv",
+        "distance_stats.csv",
+        "ks_distance_tests.csv",
+        "scaffold_group_stats.csv",
+        "metric_comparison.png",
+        "distance_distributions.png",
+        "strategy_summary.png",
+    ]
+    # Also migrate any metric_*.png files
+    for p in output_dir.glob("metric_*.png"):
+        flat_files.append(p.name)
+
+    xgboost_dir = output_dir / "xgboost"
+    migrated = []
+    for fname in flat_files:
+        src = output_dir / fname
+        dst = xgboost_dir / fname
+        if src.exists() and not dst.exists():
+            xgboost_dir.mkdir(parents=True, exist_ok=True)
+            src.rename(dst)
+            migrated.append(fname)
+    if migrated:
+        logger.info(f"Migrated {len(migrated)} existing files → xgboost/")
+
+
+def _save_figures(
+    summary_df: pd.DataFrame,
+    agg_df: pd.DataFrame,
+    dist_df: pd.DataFrame,
+    dist_stats_df: pd.DataFrame,
+    model_dir: Path,
+    dpi: int,
 ) -> None:
-    set_style()
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # ── 1. Load data ──────────────────────────────────────────────────
-    logger.info("Loading canonical dataset")
-    df = pd.read_parquet(INTERIM_DATA_DIR / "expansion_tx.parquet")
-    logger.info(f"Loaded {len(df)} molecules")
-
-    logger.info("Loading precomputed distance matrix")
-    npz = np.load(INTERIM_DATA_DIR / "tanimoto_distance_matrix.npz", allow_pickle=True)
-    dist_square = squareform(npz["condensed"])
-    dist_mol_names = npz["molecule_names"]
-    name_to_dist_idx = {str(n): i for i, n in enumerate(dist_mol_names)}
-
-    logger.info("Loading cluster CV folds")
-    cluster_folds = pd.read_parquet(INTERIM_DATA_DIR / "cluster_cv_folds.parquet")
-    cluster_folds = cluster_folds[cluster_folds["repeat"] == 0]
-
-    # ── 2. Train and evaluate per strategy per endpoint ───────────────
-    metric_rows = []
-    distance_rows = []  # per-molecule test-to-train 1-NN distances
-
-    for ep in ENDPOINTS:
-        ph = ENDPOINT_PH[ep]
-        mask = df[ep].notna().values
-        ep_df = df[mask].copy()
-        n_mol = len(ep_df)
-
-        if n_mol < 50:
-            logger.warning(f"Skipping {ep}: only {n_mol} molecules")
-            continue
-
-        names = ep_df["Molecule Name"].values
-        smiles = ep_df["SMILES"].tolist()
-
-        # Sub-distance-matrix for this endpoint
-        idx_in_full = np.array([name_to_dist_idx[n] for n in names])
-        D_sub = dist_square[np.ix_(idx_in_full, idx_in_full)]
-
-        # Activity values
-        raw_values = ep_df[ep].values
-        if ep in LOG_TRANSFORM_ENDPOINTS:
-            y_all = clip_and_log_transform(raw_values)
-        else:
-            y_all = raw_values
-
-        # Compute features once per endpoint
-        prot_smiles = protonate_at_ph(smiles, ph)
-        ecfp = compute_ecfp4(prot_smiles)
-        desc = compute_rdkit_descriptors(prot_smiles)
-        variance = desc.var(axis=0)
-        desc = desc[:, variance > 0]
-        scaler = StandardScaler()
-        desc_scaled = scaler.fit_transform(desc)
-        X_all = np.hstack([ecfp, desc_scaled])
-
-        # Generate fold assignments for each strategy
-        fold_assignments = {}
-
-        # Scaffold split
-        fold_assignments["scaffold"] = make_scaffold_folds(smiles, n_folds=5)
-
-        # Random split
-        fold_assignments["random"] = make_random_folds(n_mol, n_folds=5, seed=42)
-
-        # Cluster split (from precomputed)
-        ep_cluster = cluster_folds[cluster_folds["endpoint"] == ep]
-        cluster_map = dict(zip(ep_cluster["Molecule Name"], ep_cluster["fold"]))
-        fold_assignments["cluster"] = np.array([cluster_map.get(n, -1) for n in names])
-
-        logger.info(f"  {ep} ({n_mol} molecules)")
-
-        for strategy in STRATEGY_ORDER:
-            fold_ids = fold_assignments[strategy]
-            unique_folds = sorted(set(fold_ids[fold_ids >= 0]))
-
-            for fold_id in unique_folds:
-                test_mask = fold_ids == fold_id
-                train_mask = (fold_ids >= 0) & ~test_mask
-
-                X_tr = X_all[train_mask]
-                y_tr = y_all[train_mask]
-                X_te = X_all[test_mask]
-                y_te = y_all[test_mask]
-
-                if len(y_te) < 10 or len(y_tr) < 10:
-                    continue
-
-                # Train and predict
-                cache_dir = INTERIM_DATA_DIR / "optuna_cache"
-                model, _, _ = tune_xgboost(X_tr, y_tr, cache_dir=cache_dir, cache_key=f"{ep}_{strategy}_fold{fold_id}")
-                y_pred = model.predict(X_te)
-
-                # Competition metrics
-                mae = mean_absolute_error(y_te, y_pred)
-                r2 = r2_score(y_te, y_pred)
-                sp_r, _ = spearmanr(y_te, y_pred)
-                kt, _ = kendalltau(y_te, y_pred)
-                baseline_mad = np.mean(np.abs(y_te - np.mean(y_te)))
-                rae = mae / baseline_mad if baseline_mad > 0 else np.nan
-
-                metric_rows.append({
-                    "endpoint": ep,
-                    "strategy": strategy,
-                    "fold": fold_id,
-                    "n_train": int(train_mask.sum()),
-                    "n_test": int(test_mask.sum()),
-                    "mae": mae,
-                    "r2": r2,
-                    "spearman_r": sp_r,
-                    "kendall_tau": kt,
-                    "rae": rae,
-                })
-
-                # Test-to-train 1-NN distances
-                test_idx = np.where(test_mask)[0]
-                train_idx = np.where(train_mask)[0]
-                nn1_dists = D_sub[np.ix_(test_idx, train_idx)].min(axis=1)
-
-                for d in nn1_dists:
-                    distance_rows.append({
-                        "endpoint": ep,
-                        "strategy": strategy,
-                        "fold": fold_id,
-                        "nn1_distance": d,
-                    })
-
-            logger.info(
-                f"    {strategy}: {len(unique_folds)} folds, "
-                f"sizes={[int((fold_ids == f).sum()) for f in unique_folds]}"
-            )
-
-    # ── 3. Save per-fold metrics ──────────────────────────────────────
-    summary_df = pd.DataFrame(metric_rows)
-    summary_df.to_csv(output_dir / "summary_metrics.csv", index=False)
-    logger.info(f"Saved summary_metrics.csv ({len(summary_df)} rows)")
-
-    # ── 4. Aggregate metrics (mean ± std per endpoint per strategy) ───
-    agg_rows = []
-    for (ep, strategy), grp in summary_df.groupby(["endpoint", "strategy"]):
-        row = {"endpoint": ep, "strategy": strategy, "n_folds": len(grp)}
-        for col in ["mae", "r2", "spearman_r", "kendall_tau", "rae"]:
-            row[f"{col}_mean"] = grp[col].mean()
-            row[f"{col}_std"] = grp[col].std()
-        agg_rows.append(row)
-
-    agg_df = pd.DataFrame(agg_rows)
-    agg_df.to_csv(output_dir / "aggregated_metrics.csv", index=False)
-    logger.info(f"Saved aggregated_metrics.csv ({len(agg_df)} rows)")
-
-    # Log MA-RAE per strategy
-    for strategy in STRATEGY_ORDER:
-        strat_sub = summary_df[summary_df["strategy"] == strategy]
-        ma_rae = strat_sub.groupby("fold")["rae"].mean().mean()
-        logger.info(f"MA-RAE ({strategy}): {ma_rae:.3f}")
-
-    # ── 5. Distance statistics ────────────────────────────────────────
-    dist_df = pd.DataFrame(distance_rows)
-    dist_stats_rows = []
-    for strategy in STRATEGY_ORDER:
-        s_dists = dist_df[dist_df["strategy"] == strategy]["nn1_distance"].values
-        dist_stats_rows.append({
-            "strategy": strategy,
-            "mean": np.mean(s_dists),
-            "median": np.median(s_dists),
-            "std": np.std(s_dists),
-            "q25": np.percentile(s_dists, 25),
-            "q75": np.percentile(s_dists, 75),
-            "q90": np.percentile(s_dists, 90),
-            "n": len(s_dists),
-        })
-
-    dist_stats_df = pd.DataFrame(dist_stats_rows)
-    dist_stats_df.to_csv(output_dir / "distance_stats.csv", index=False)
-    logger.info("Saved distance_stats.csv")
-    for _, row in dist_stats_df.iterrows():
-        logger.info(
-            f"  {row['strategy']}: median 1-NN={row['median']:.3f}, "
-            f"mean={row['mean']:.3f}, q75={row['q75']:.3f}"
-        )
-
-    # ── 6. Figure A: Per-metric comparison (grouped bar charts) ───────
+    """Generate and save all per-model figures."""
     active_endpoints = sorted(agg_df["endpoint"].unique())
     n_ep = len(active_endpoints)
     x = np.arange(n_ep)
@@ -401,7 +263,7 @@ def main(
             ax.axhline(y=0, color="gray", linestyle="--", alpha=0.3)
 
         fig.tight_layout()
-        fig.savefig(output_dir / f"metric_{col}.png", dpi=dpi, bbox_inches="tight")
+        fig.savefig(model_dir / f"metric_{col}.png", dpi=dpi, bbox_inches="tight")
         logger.info(f"Saved metric_{col}.png")
         plt.close("all")
 
@@ -440,11 +302,11 @@ def main(
 
     fig.suptitle("Scaffold vs random vs cluster split — performance comparison", fontsize=14, y=1.01)
     fig.tight_layout()
-    fig.savefig(output_dir / "metric_comparison.png", dpi=dpi, bbox_inches="tight")
+    fig.savefig(model_dir / "metric_comparison.png", dpi=dpi, bbox_inches="tight")
     logger.info("Saved metric_comparison.png")
     plt.close("all")
 
-    # ── 7. Figure B: Distance distributions ───────────────────────────
+    # Distance distributions
     fig, ax = plt.subplots(figsize=(10, 6))
 
     for strategy in STRATEGY_ORDER:
@@ -457,17 +319,16 @@ def main(
     ax.set_title("Test-to-train structural distance distributions by split strategy")
     ax.legend(fontsize=9)
     fig.tight_layout()
-    fig.savefig(output_dir / "distance_distributions.png", dpi=dpi, bbox_inches="tight")
+    fig.savefig(model_dir / "distance_distributions.png", dpi=dpi, bbox_inches="tight")
     logger.info("Saved distance_distributions.png")
     plt.close("all")
 
-    # ── 8. Figure C: Strategy summary (MA-RAE bar chart) ──────────────
+    # Strategy summary (MA-RAE bar chart)
     fig, ax = plt.subplots(figsize=(6, 4))
 
     ma_raes = []
     for strategy in STRATEGY_ORDER:
         strat_sub = summary_df[summary_df["strategy"] == strategy]
-        # MA-RAE: mean RAE across endpoints, then mean across folds
         ma_rae = strat_sub.groupby("fold")["rae"].mean().mean()
         ma_raes.append(ma_rae)
 
@@ -483,11 +344,285 @@ def main(
     ax.set_title("Mean-across-endpoints RAE by split strategy")
     ax.axhline(y=1, color="gray", linestyle="--", alpha=0.3)
     fig.tight_layout()
-    fig.savefig(output_dir / "strategy_summary.png", dpi=dpi, bbox_inches="tight")
+    fig.savefig(model_dir / "strategy_summary.png", dpi=dpi, bbox_inches="tight")
     logger.info("Saved strategy_summary.png")
     plt.close("all")
 
-    # ── 9. KS tests on distance distributions ──────────────────────
+
+def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
+    """Load both models' aggregated_metrics.csv and produce combined comparison figures."""
+    xgb_path = output_dir / "xgboost" / "aggregated_metrics.csv"
+    chemprop_path = output_dir / "chemprop" / "aggregated_metrics.csv"
+
+    missing = [p for p in [xgb_path, chemprop_path] if not p.exists()]
+    if missing:
+        logger.error(f"Cannot generate combined figures — missing: {[str(p) for p in missing]}")
+        return
+
+    xgb_df = pd.read_csv(xgb_path)
+    chemprop_df = pd.read_csv(chemprop_path)
+
+    metrics = [
+        ("mae_mean", "MAE"),
+        ("r2_mean", "R²"),
+        ("spearman_r_mean", "Spearman ρ"),
+        ("rae_mean", "RAE"),
+    ]
+
+    for strategy in STRATEGY_ORDER:
+        xgb_strat = xgb_df[xgb_df["strategy"] == strategy].copy()
+        chemprop_strat = chemprop_df[chemprop_df["strategy"] == strategy].copy()
+
+        if xgb_strat.empty and chemprop_strat.empty:
+            continue
+
+        for metric_col, ylabel in metrics:
+            out_path = output_dir / f"combined_{strategy}_{metric_col.replace('_mean', '')}.png"
+            plot_model_comparison_bars(
+                data_by_model={"xgboost": xgb_strat, "chemprop": chemprop_strat},
+                endpoint_col="endpoint",
+                metric_col=metric_col,
+                ylabel=ylabel,
+                title=f"{ylabel} — {strategy} split: XGBoost vs Chemprop",
+                output_path=out_path,
+                dpi=dpi,
+            )
+            logger.info(f"Saved {out_path.name}")
+
+    logger.info(f"Combined figures saved to {output_dir}")
+
+
+@app.command()
+def main(
+    output_dir: Path = typer.Option(
+        PROCESSED_DATA_DIR / "2.11-seal-scaffold-vs-random", help="Output directory"
+    ),
+    dpi: int = typer.Option(DEFAULT_DPI, help="DPI for saved figures"),
+    model: str = typer.Option("xgboost", help="Model architecture: xgboost or chemprop"),
+    combined: bool = typer.Option(False, help="Generate combined XGBoost+Chemprop comparison figures"),
+) -> None:
+    set_style()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if combined:
+        _generate_combined_figures(output_dir, dpi)
+        return
+
+    _migrate_flat_outputs(output_dir)
+    model_dir = output_dir / model
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── 1. Load data ──────────────────────────────────────────────────
+    logger.info("Loading canonical dataset")
+    df = pd.read_parquet(INTERIM_DATA_DIR / "expansion_tx.parquet")
+    logger.info(f"Loaded {len(df)} molecules")
+
+    logger.info("Loading precomputed distance matrix")
+    npz = np.load(INTERIM_DATA_DIR / "tanimoto_distance_matrix.npz", allow_pickle=True)
+    dist_square = squareform(npz["condensed"])
+    dist_mol_names = npz["molecule_names"]
+    name_to_dist_idx = {str(n): i for i, n in enumerate(dist_mol_names)}
+
+    logger.info("Loading cluster CV folds")
+    cluster_folds = pd.read_parquet(INTERIM_DATA_DIR / "cluster_cv_folds.parquet")
+    cluster_folds = cluster_folds[cluster_folds["repeat"] == 0]
+
+    # Skip training if key outputs already exist
+    if (model_dir / "summary_metrics.csv").exists():
+        logger.info(f"Existing {model} outputs found — regenerating figures only")
+        summary_df = pd.read_csv(model_dir / "summary_metrics.csv")
+        agg_df = pd.read_csv(model_dir / "aggregated_metrics.csv")
+        dist_df_loaded = pd.read_csv(model_dir / "distance_stats.csv")
+        # Reconstruct distance_rows from summary if dist_df_loaded only has stats
+        # (distance_distributions.png needs per-molecule distances — skip regeneration if unavailable)
+        # We'll still regenerate the metric and strategy figures from agg/summary
+        _save_figures(summary_df, agg_df, pd.DataFrame(columns=["strategy", "nn1_distance"]),
+                      dist_df_loaded, model_dir, dpi)
+        logger.info(f"Figures regenerated in {model_dir}")
+        return
+
+    chemprop_cache = INTERIM_DATA_DIR / "chemprop_pred_cache"
+
+    # ── 2. Train and evaluate per strategy per endpoint ───────────────
+    metric_rows = []
+    distance_rows = []  # per-molecule test-to-train 1-NN distances
+
+    for ep in ENDPOINTS:
+        ph = ENDPOINT_PH[ep]
+        mask = df[ep].notna().values
+        ep_df = df[mask].copy()
+        n_mol = len(ep_df)
+
+        if n_mol < 50:
+            logger.warning(f"Skipping {ep}: only {n_mol} molecules")
+            continue
+
+        names = ep_df["Molecule Name"].values
+        smiles = ep_df["SMILES"].tolist()
+
+        # Sub-distance-matrix for this endpoint
+        idx_in_full = np.array([name_to_dist_idx[n] for n in names])
+        D_sub = dist_square[np.ix_(idx_in_full, idx_in_full)]
+
+        # Activity values
+        raw_values = ep_df[ep].values
+        if ep in LOG_TRANSFORM_ENDPOINTS:
+            y_all = clip_and_log_transform(raw_values)
+        else:
+            y_all = raw_values
+
+        # Always: protonate (needed for both XGBoost and Chemprop)
+        prot_smiles = protonate_at_ph(smiles, ph)
+
+        # XGBoost only: feature computation
+        if model == "xgboost":
+            ecfp = compute_ecfp4(prot_smiles)
+            desc = compute_rdkit_descriptors(prot_smiles)
+            variance = desc.var(axis=0)
+            desc = desc[:, variance > 0]
+            scaler = StandardScaler()
+            desc_scaled = scaler.fit_transform(desc)
+            X_all = np.hstack([ecfp, desc_scaled])
+
+        # Generate fold assignments for each strategy
+        fold_assignments = {}
+
+        # Scaffold split
+        fold_assignments["scaffold"] = make_scaffold_folds(smiles, n_folds=5)
+
+        # Random split
+        fold_assignments["random"] = make_random_folds(n_mol, n_folds=5, seed=42)
+
+        # Cluster split (from precomputed)
+        ep_cluster = cluster_folds[cluster_folds["endpoint"] == ep]
+        cluster_map = dict(zip(ep_cluster["Molecule Name"], ep_cluster["fold"]))
+        fold_assignments["cluster"] = np.array([cluster_map.get(n, -1) for n in names])
+
+        logger.info(f"  {ep} ({n_mol} molecules)")
+
+        for strategy in STRATEGY_ORDER:
+            fold_ids = fold_assignments[strategy]
+            unique_folds = sorted(set(fold_ids[fold_ids >= 0]))
+
+            for fold_id in unique_folds:
+                test_mask = fold_ids == fold_id
+                train_mask = (fold_ids >= 0) & ~test_mask
+
+                y_tr = y_all[train_mask]
+                y_te = y_all[test_mask]
+
+                if len(y_te) < 10 or len(y_tr) < 10:
+                    continue
+
+                # Train and predict
+                if model == "xgboost":
+                    X_tr = X_all[train_mask]
+                    X_te = X_all[test_mask]
+                    cache_dir = INTERIM_DATA_DIR / "optuna_cache"
+                    model_obj, _, _ = tune_xgboost(X_tr, y_tr, cache_dir=cache_dir, cache_key=f"{ep}_{strategy}_fold{fold_id}")
+                    y_pred = model_obj.predict(X_te)
+                else:
+                    train_idx = np.where(train_mask)[0]
+                    test_idx_arr = np.where(test_mask)[0]
+                    train_prot = [prot_smiles[i] for i in train_idx]
+                    test_prot = [prot_smiles[i] for i in test_idx_arr]
+                    y_pred = train_chemprop(train_prot, y_tr, test_prot,
+                                           cache_dir=chemprop_cache,
+                                           cache_key=f"2.11_{ep}_{strategy}_fold{fold_id}",
+                                           checkpoint_dir=model_dir / "models")
+
+                # Competition metrics
+                mae = mean_absolute_error(y_te, y_pred)
+                r2 = r2_score(y_te, y_pred)
+                sp_r, _ = spearmanr(y_te, y_pred)
+                kt, _ = kendalltau(y_te, y_pred)
+                baseline_mad = np.mean(np.abs(y_te - np.mean(y_te)))
+                rae = mae / baseline_mad if baseline_mad > 0 else np.nan
+
+                metric_rows.append({
+                    "endpoint": ep,
+                    "strategy": strategy,
+                    "fold": fold_id,
+                    "n_train": int(train_mask.sum()),
+                    "n_test": int(test_mask.sum()),
+                    "mae": mae,
+                    "r2": r2,
+                    "spearman_r": sp_r,
+                    "kendall_tau": kt,
+                    "rae": rae,
+                })
+
+                # Test-to-train 1-NN distances
+                test_idx = np.where(test_mask)[0]
+                train_idx = np.where(train_mask)[0]
+                nn1_dists = D_sub[np.ix_(test_idx, train_idx)].min(axis=1)
+
+                for d in nn1_dists:
+                    distance_rows.append({
+                        "endpoint": ep,
+                        "strategy": strategy,
+                        "fold": fold_id,
+                        "nn1_distance": d,
+                    })
+
+            logger.info(
+                f"    {strategy}: {len(unique_folds)} folds, "
+                f"sizes={[int((fold_ids == f).sum()) for f in unique_folds]}"
+            )
+
+    # ── 3. Save per-fold metrics ──────────────────────────────────────
+    summary_df = pd.DataFrame(metric_rows)
+    summary_df.to_csv(model_dir / "summary_metrics.csv", index=False)
+    logger.info(f"Saved summary_metrics.csv ({len(summary_df)} rows)")
+
+    # ── 4. Aggregate metrics (mean ± std per endpoint per strategy) ───
+    agg_rows = []
+    for (ep, strategy), grp in summary_df.groupby(["endpoint", "strategy"]):
+        row = {"endpoint": ep, "strategy": strategy, "n_folds": len(grp)}
+        for col in ["mae", "r2", "spearman_r", "kendall_tau", "rae"]:
+            row[f"{col}_mean"] = grp[col].mean()
+            row[f"{col}_std"] = grp[col].std()
+        agg_rows.append(row)
+
+    agg_df = pd.DataFrame(agg_rows)
+    agg_df.to_csv(model_dir / "aggregated_metrics.csv", index=False)
+    logger.info(f"Saved aggregated_metrics.csv ({len(agg_df)} rows)")
+
+    # Log MA-RAE per strategy
+    for strategy in STRATEGY_ORDER:
+        strat_sub = summary_df[summary_df["strategy"] == strategy]
+        ma_rae = strat_sub.groupby("fold")["rae"].mean().mean()
+        logger.info(f"MA-RAE ({strategy}): {ma_rae:.3f}")
+
+    # ── 5. Distance statistics ────────────────────────────────────────
+    dist_df = pd.DataFrame(distance_rows)
+    dist_stats_rows = []
+    for strategy in STRATEGY_ORDER:
+        s_dists = dist_df[dist_df["strategy"] == strategy]["nn1_distance"].values
+        dist_stats_rows.append({
+            "strategy": strategy,
+            "mean": np.mean(s_dists),
+            "median": np.median(s_dists),
+            "std": np.std(s_dists),
+            "q25": np.percentile(s_dists, 25),
+            "q75": np.percentile(s_dists, 75),
+            "q90": np.percentile(s_dists, 90),
+            "n": len(s_dists),
+        })
+
+    dist_stats_df = pd.DataFrame(dist_stats_rows)
+    dist_stats_df.to_csv(model_dir / "distance_stats.csv", index=False)
+    logger.info("Saved distance_stats.csv")
+    for _, row in dist_stats_df.iterrows():
+        logger.info(
+            f"  {row['strategy']}: median 1-NN={row['median']:.3f}, "
+            f"mean={row['mean']:.3f}, q75={row['q75']:.3f}"
+        )
+
+    # ── 6. Figures ────────────────────────────────────────────────────
+    _save_figures(summary_df, agg_df, dist_df, dist_stats_df, model_dir, dpi)
+
+    # ── 7. KS tests on distance distributions ──────────────────────
     logger.info("Computing KS tests on 1-NN distance distributions")
 
     comparisons = [
@@ -520,10 +655,14 @@ def main(
         )
 
     ks_df = pd.DataFrame(ks_rows)
-    ks_df.to_csv(output_dir / "ks_distance_tests.csv", index=False)
+    ks_df.to_csv(model_dir / "ks_distance_tests.csv", index=False)
     logger.info("Saved ks_distance_tests.csv")
 
-    # ── 10. Scaffold group size statistics ─────────────────────────
+    # ── 8. Scaffold group size statistics ─────────────────────────
+    # Model-agnostic: save directly in output_dir
+    scaffold_group_sizes_path = output_dir / "scaffold_group_sizes.png"
+    scaffold_group_stats_path = model_dir / "scaffold_group_stats.csv"
+
     logger.info("Computing scaffold group size statistics")
 
     all_smiles = df["SMILES"].tolist()
@@ -547,33 +686,36 @@ def main(
         "max_group_size": int(np.max(group_sizes)),
     }
     stats_df = pd.DataFrame([stats])
-    stats_df.to_csv(output_dir / "scaffold_group_stats.csv", index=False)
+    stats_df.to_csv(scaffold_group_stats_path, index=False)
     logger.info(
         f"  {n_unique} unique scaffolds, {n_singletons} singletons "
         f"({stats['pct_singletons']:.1f}%), median size {stats['median_group_size']}"
     )
 
-    # Histogram of scaffold group sizes
-    fig, ax = plt.subplots(figsize=(8, 4))
-    max_display = 20
-    bins = np.arange(1, max_display + 2) - 0.5
-    clipped = np.clip(group_sizes, 1, max_display)
-    ax.hist(clipped, bins=bins, color="coral", edgecolor="white", alpha=0.8)
-    tick_labels = [str(i) for i in range(1, max_display)] + [f"{max_display}+"]
-    ax.set_xticks(range(1, max_display + 1))
-    ax.set_xticklabels(tick_labels, fontsize=8)
-    ax.set_xlabel("Scaffold group size")
-    ax.set_ylabel("Number of scaffolds")
-    ax.set_title(
-        f"Murcko scaffold group size distribution "
-        f"({n_singletons}/{n_unique} = {stats['pct_singletons']:.0f}% singletons)"
-    )
-    fig.tight_layout()
-    fig.savefig(output_dir / "scaffold_group_sizes.png", dpi=dpi, bbox_inches="tight")
-    logger.info("Saved scaffold_group_sizes.png")
-    plt.close("all")
+    # Histogram of scaffold group sizes (model-agnostic, saved to output_dir)
+    if not scaffold_group_sizes_path.exists():
+        fig, ax = plt.subplots(figsize=(8, 4))
+        max_display = 20
+        bins = np.arange(1, max_display + 2) - 0.5
+        clipped = np.clip(group_sizes, 1, max_display)
+        ax.hist(clipped, bins=bins, color="coral", edgecolor="white", alpha=0.8)
+        tick_labels = [str(i) for i in range(1, max_display)] + [f"{max_display}+"]
+        ax.set_xticks(range(1, max_display + 1))
+        ax.set_xticklabels(tick_labels, fontsize=8)
+        ax.set_xlabel("Scaffold group size")
+        ax.set_ylabel("Number of scaffolds")
+        ax.set_title(
+            f"Murcko scaffold group size distribution "
+            f"({n_singletons}/{n_unique} = {stats['pct_singletons']:.0f}% singletons)"
+        )
+        fig.tight_layout()
+        fig.savefig(scaffold_group_sizes_path, dpi=dpi, bbox_inches="tight")
+        logger.info("Saved scaffold_group_sizes.png")
+        plt.close("all")
+    else:
+        logger.info("scaffold_group_sizes.png already exists — skipping")
 
-    logger.info(f"All outputs saved to {output_dir}")
+    logger.info(f"All outputs saved to {model_dir}")
 
 
 if __name__ == "__main__":

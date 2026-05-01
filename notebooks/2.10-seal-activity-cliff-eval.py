@@ -2,33 +2,47 @@
 """Activity cliff evaluation (paper Fig S3, ref: MoleculeACE).
 
 Identifies activity cliffs — pairs of structurally similar molecules with large
-activity differences — and evaluates XGBoost performance on cliff vs non-cliff
-molecules. Uses cluster-split CV (repeat 0, 5 folds) to train and evaluate.
-Demonstrates that smoothly interpolating models fail on activity cliffs.
+activity differences — and evaluates XGBoost or Chemprop D-MPNN performance on
+cliff vs non-cliff molecules. Uses cluster-split CV (repeat 0, 5 folds) to train
+and evaluate. Demonstrates that smoothly interpolating models fail on activity cliffs.
 
 Usage:
-    # Full eval (retrains XGBoost per fold; slow)
+    # Full eval (default XGBoost)
     pixi run -e cheminformatics python notebooks/2.10-seal-activity-cliff-eval.py main
 
-    # Threshold-sensitivity sweep (reuses predictions from main; fast)
-    pixi run -e cheminformatics python notebooks/2.10-seal-activity-cliff-eval.py sensitivity
+    # Full eval with Chemprop D-MPNN
+    pixi run -e cheminformatics python notebooks/2.10-seal-activity-cliff-eval.py main --model chemprop
 
-Outputs (main):
+    # Combined XGBoost vs Chemprop comparison figures
+    pixi run -e cheminformatics python notebooks/2.10-seal-activity-cliff-eval.py main --combined
+
+    # Threshold-sensitivity sweep using existing model predictions
+    pixi run -e cheminformatics python notebooks/2.10-seal-activity-cliff-eval.py sensitivity
+    pixi run -e cheminformatics python notebooks/2.10-seal-activity-cliff-eval.py sensitivity --model chemprop
+
+Model-agnostic outputs:
     data/processed/2.10-seal-activity-cliff-eval/cliff_stats.csv
     data/processed/2.10-seal-activity-cliff-eval/cliff_molecules.csv
-    data/processed/2.10-seal-activity-cliff-eval/cliff_vs_noncliff_errors.csv
-    data/processed/2.10-seal-activity-cliff-eval/summary_metrics.csv
-    data/processed/2.10-seal-activity-cliff-eval/squared_error_distributions.png
     data/processed/2.10-seal-activity-cliff-eval/cliff_characterization.png
-    data/processed/2.10-seal-activity-cliff-eval/{median_se,mae,r2,spearman,kendall,rae}_by_endpoint.png
 
-Outputs (sensitivity):
-    data/processed/2.10-seal-activity-cliff-eval/cliff_sensitivity.csv
-    data/processed/2.10-seal-activity-cliff-eval/cliff_sensitivity_pairs.parquet
-    data/processed/2.10-seal-activity-cliff-eval/cliff_sensitivity_pct.png
-    data/processed/2.10-seal-activity-cliff-eval/cliff_sensitivity_rae_gap.png
-    data/processed/2.10-seal-activity-cliff-eval/cliff_sensitivity_joint.png
-    data/processed/2.10-seal-activity-cliff-eval/cliff_sensitivity_combined.png
+Outputs (per model, main):
+    data/processed/2.10-seal-activity-cliff-eval/{model}/cliff_vs_noncliff_errors.csv
+    data/processed/2.10-seal-activity-cliff-eval/{model}/summary_metrics.csv
+    data/processed/2.10-seal-activity-cliff-eval/{model}/squared_error_distributions.png
+    data/processed/2.10-seal-activity-cliff-eval/{model}/median_se_by_endpoint.png
+    data/processed/2.10-seal-activity-cliff-eval/{model}/mae_by_endpoint.png
+    data/processed/2.10-seal-activity-cliff-eval/{model}/r2_by_endpoint.png
+    data/processed/2.10-seal-activity-cliff-eval/{model}/spearman_by_endpoint.png
+    data/processed/2.10-seal-activity-cliff-eval/{model}/kendall_by_endpoint.png
+    data/processed/2.10-seal-activity-cliff-eval/{model}/rae_by_endpoint.png
+
+Outputs (per model, sensitivity):
+    data/processed/2.10-seal-activity-cliff-eval/{model}/cliff_sensitivity.csv
+    data/processed/2.10-seal-activity-cliff-eval/{model}/cliff_sensitivity_pairs.parquet
+    data/processed/2.10-seal-activity-cliff-eval/{model}/cliff_sensitivity_pct.png
+    data/processed/2.10-seal-activity-cliff-eval/{model}/cliff_sensitivity_rae_gap.png
+    data/processed/2.10-seal-activity-cliff-eval/{model}/cliff_sensitivity_joint.png
+    data/processed/2.10-seal-activity-cliff-eval/{model}/cliff_sensitivity_combined.png
 """
 
 from pathlib import Path
@@ -48,9 +62,14 @@ from scipy.stats import kendalltau, spearmanr
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.preprocessing import StandardScaler
 
+from polaris_generalization.chemprop_utils import train_chemprop
 from polaris_generalization.config import INTERIM_DATA_DIR, PROCESSED_DATA_DIR
 from polaris_generalization.tuning import tune_xgboost
-from polaris_generalization.visualization import DEFAULT_DPI, set_style
+from polaris_generalization.visualization import (
+    DEFAULT_DPI,
+    plot_model_comparison_bars,
+    set_style,
+)
 
 RDLogger.DisableLog("rdApp.*")
 
@@ -179,6 +198,153 @@ def identify_cliffs(
     return cliff_indices, cliff_pairs, diff_threshold
 
 
+def _migrate_flat_outputs(output_dir: Path) -> None:
+    """Move pre-model-flag XGBoost outputs into xgboost/ subdirectory."""
+    flat_files = [
+        "cliff_vs_noncliff_errors.csv", "summary_metrics.csv",
+        "squared_error_distributions.png",
+        "median_se_by_endpoint.png", "mae_by_endpoint.png", "r2_by_endpoint.png",
+        "spearman_by_endpoint.png", "kendall_by_endpoint.png", "rae_by_endpoint.png",
+    ]
+    xgboost_dir = output_dir / "xgboost"
+    migrated = []
+    for fname in flat_files:
+        src = output_dir / fname
+        dst = xgboost_dir / fname
+        if src.exists() and not dst.exists():
+            xgboost_dir.mkdir(parents=True, exist_ok=True)
+            src.rename(dst)
+            migrated.append(fname)
+    if migrated:
+        logger.info(f"Migrated {len(migrated)} existing files → xgboost/")
+
+
+def _generate_figures(errors_df: pd.DataFrame, metrics_df: pd.DataFrame,
+                      model_dir: Path, dpi: int) -> None:
+    """Generate all per-model figures."""
+    active_endpoints = sorted(metrics_df["endpoint"].unique())
+    n_ep = len(active_endpoints)
+
+    # Figure A: Squared error distributions (3×3 grid)
+    nrows = (n_ep + 2) // 3
+    ncols = min(n_ep, 3)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 4 * nrows))
+    axes = np.atleast_2d(axes).ravel()
+
+    for ax_idx, ep in enumerate(active_endpoints):
+        ax = axes[ax_idx]
+        cliff_se = errors_df[(errors_df["endpoint"] == ep) & (errors_df["is_cliff"])]["squared_error"]
+        noncliff_se = errors_df[(errors_df["endpoint"] == ep) & (~errors_df["is_cliff"])]["squared_error"]
+
+        if cliff_se.empty or noncliff_se.empty:
+            ax.set_visible(False)
+            continue
+
+        all_se = np.concatenate([cliff_se.values, noncliff_se.values])
+        lo = max(all_se.min(), 1e-8)
+        hi = all_se.max()
+        bins = np.logspace(np.log10(lo), np.log10(hi), 40)
+
+        ax.hist(noncliff_se, bins=bins, density=True, alpha=0.6, color="steelblue",
+                label=f"Non-cliff (med={np.median(noncliff_se):.3f})", edgecolor="white")
+        ax.hist(cliff_se, bins=bins, density=True, alpha=0.6, color="coral",
+                label=f"Cliff (med={np.median(cliff_se):.3f})", edgecolor="white")
+
+        ax.set_xscale("log")
+        ax.set_xlabel("Squared error")
+        ax.set_ylabel("Density")
+        ax.set_title(ep, fontsize=10, fontweight="bold")
+        ax.legend(fontsize=7)
+
+    for i in range(n_ep, len(axes)):
+        axes[i].set_visible(False)
+
+    fig.suptitle("Cliff vs non-cliff squared error distributions", fontsize=14, y=1.01)
+    fig.tight_layout()
+    fig.savefig(model_dir / "squared_error_distributions.png", dpi=dpi, bbox_inches="tight")
+    logger.info("Saved squared_error_distributions.png")
+    plt.close("all")
+
+    # Figure B: Per-metric bar charts
+    x = np.arange(len(active_endpoints))
+    width = 0.35
+
+    metric_plots = [
+        ("median_se", "Median squared error", "median_se"),
+        ("mae", "MAE", "mae"),
+        ("r2", "R²", "r2"),
+        ("spearman_r", "Spearman ρ", "spearman"),
+        ("kendall_tau", "Kendall τ", "kendall"),
+        ("rae", "RAE", "rae"),
+    ]
+
+    for col, ylabel, fname in metric_plots:
+        fig, ax = plt.subplots(figsize=(10, 5))
+
+        cliff_vals = []
+        noncliff_vals = []
+        for ep in active_endpoints:
+            cliff_row = metrics_df[(metrics_df["endpoint"] == ep) & (metrics_df["set"] == "cliff")]
+            noncliff_row = metrics_df[(metrics_df["endpoint"] == ep) & (metrics_df["set"] == "non-cliff")]
+            cliff_vals.append(cliff_row[col].values[0] if not cliff_row.empty else np.nan)
+            noncliff_vals.append(noncliff_row[col].values[0] if not noncliff_row.empty else np.nan)
+
+        ax.bar(x - width / 2, noncliff_vals, width, label="Non-cliff",
+               color="steelblue", edgecolor="white", alpha=0.8)
+        ax.bar(x + width / 2, cliff_vals, width, label="Cliff",
+               color="coral", edgecolor="white", alpha=0.8)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(active_endpoints, rotation=45, ha="right", fontsize=8)
+        ax.set_ylabel(ylabel)
+        ax.set_title(f"Cliff vs non-cliff {ylabel} by endpoint")
+        ax.legend()
+        if col in ("r2",):
+            ax.axhline(y=0, color="gray", linestyle="--", alpha=0.3)
+        fig.tight_layout()
+        fig.savefig(model_dir / f"{fname}_by_endpoint.png", dpi=dpi, bbox_inches="tight")
+        logger.info(f"Saved {fname}_by_endpoint.png")
+        plt.close("all")
+
+
+def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
+    """Load both models' metrics and produce side-by-side comparison figures."""
+    xgb_path = output_dir / "xgboost" / "summary_metrics.csv"
+    chemprop_path = output_dir / "chemprop" / "summary_metrics.csv"
+
+    missing = [m for m, p in [("xgboost", xgb_path), ("chemprop", chemprop_path)] if not p.exists()]
+    if missing:
+        logger.error(f"Missing results for: {missing}. Run those models first.")
+        return
+
+    combined_dir = output_dir / "combined"
+    combined_dir.mkdir(parents=True, exist_ok=True)
+
+    xgb = pd.read_csv(xgb_path)
+    chemprop = pd.read_csv(chemprop_path)
+
+    for set_label in ("cliff", "non-cliff"):
+        xgb_set = xgb[xgb["set"] == set_label].copy()
+        chemprop_set = chemprop[chemprop["set"] == set_label].copy()
+        data_by_model = {"xgboost": xgb_set, "chemprop": chemprop_set}
+
+        fname_label = set_label.replace("-", "")
+        for metric, ylabel, fname in [
+            ("mae", "MAE", "mae"),
+            ("r2", "R²", "r2"),
+            ("spearman_r", "Spearman ρ", "spearman"),
+            ("rae", "RAE", "rae"),
+        ]:
+            plot_model_comparison_bars(
+                data_by_model, "endpoint", metric, ylabel,
+                f"{ylabel} — XGBoost vs Chemprop ({set_label})",
+                combined_dir / f"{fname}_{fname_label}_comparison.png", dpi=dpi,
+            )
+            logger.info(f"Saved {fname}_{fname_label}_comparison.png")
+
+    logger.info(f"Combined figures saved to {combined_dir}")
+
+
 @app.command()
 def main(
     output_dir: Path = typer.Option(
@@ -187,9 +353,24 @@ def main(
     dpi: int = typer.Option(DEFAULT_DPI, help="DPI for saved figures"),
     sim_threshold: float = typer.Option(0.85, help="Tanimoto similarity threshold for similar pairs"),
     min_diff: float = typer.Option(1.0, help="Absolute activity difference threshold for cliff definition"),
+    model: str = typer.Option("xgboost", help="Model architecture: xgboost or chemprop"),
+    combined: bool = typer.Option(False, help="Generate combined XGBoost+Chemprop comparison figures"),
 ) -> None:
     set_style()
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    if combined:
+        _generate_combined_figures(output_dir, dpi)
+        return
+
+    if model not in ("xgboost", "chemprop"):
+        logger.error(f"Unknown model: {model}. Choose xgboost or chemprop.")
+        raise typer.Exit(1)
+
+    _migrate_flat_outputs(output_dir)
+
+    model_dir = output_dir / model
+    model_dir.mkdir(parents=True, exist_ok=True)
 
     # ── 1. Load data ──────────────────────────────────────────────────
     logger.info("Loading canonical dataset")
@@ -277,9 +458,50 @@ def main(
     cliff_mol_df.to_csv(output_dir / "cliff_molecules.csv", index=False)
     logger.info(f"Saved cliff_molecules.csv ({len(cliff_mol_df)} rows)")
 
-    # ── 3. Train XGBoost with cluster-split CV and evaluate ───────────
+    # Cliff characterization figure (model-agnostic)
+    ep_order = cliff_stats_df.sort_values("pct_cliff", ascending=False)["endpoint"]
+    x = np.arange(len(ep_order))
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    ax = axes[0]
+    pcts = [cliff_stats_df[cliff_stats_df["endpoint"] == ep]["pct_cliff"].values[0] for ep in ep_order]
+    ax.bar(x, pcts, color="coral", edgecolor="white", alpha=0.8)
+    ax.set_xticks(x)
+    ax.set_xticklabels(ep_order, rotation=45, ha="right", fontsize=8)
+    ax.set_ylabel("% cliff molecules")
+    ax.set_title(f"Activity cliff prevalence (sim>{sim_threshold})")
+
+    ax = axes[1]
+    ax.bar(x, [cliff_stats_df[cliff_stats_df["endpoint"] == ep]["n_cliff_pairs"].values[0] for ep in ep_order],
+           color="coral", edgecolor="white", alpha=0.8, label="Cliff pairs")
+    ax.set_xticks(x)
+    ax.set_xticklabels(ep_order, rotation=45, ha="right", fontsize=8)
+    ax.set_ylabel("Number of cliff pairs")
+    ax.set_title("Cliff pair counts per endpoint")
+
+    fig.tight_layout()
+    fig.savefig(output_dir / "cliff_characterization.png", dpi=dpi, bbox_inches="tight")
+    logger.info("Saved cliff_characterization.png")
+    plt.close("all")
+
+    # Skip training if outputs already exist
+    errors_path = model_dir / "cliff_vs_noncliff_errors.csv"
+    metrics_path = model_dir / "summary_metrics.csv"
+    if errors_path.exists() and metrics_path.exists():
+        logger.info(f"Existing {model} outputs found — regenerating figures only")
+        errors_df = pd.read_csv(errors_path)
+        metrics_df = pd.read_csv(metrics_path)
+        _generate_figures(errors_df, metrics_df, model_dir, dpi)
+        logger.info("Figures regenerated (no models retrained)")
+        return
+
+    # ── 3. Train model with cluster-split CV and evaluate ─────────────
     error_rows = []
     metric_rows = []
+
+    optuna_cache = INTERIM_DATA_DIR / "optuna_cache"
+    chemprop_cache = INTERIM_DATA_DIR / "chemprop_pred_cache"
 
     for ep in ENDPOINTS:
         ph = ENDPOINT_PH[ep]
@@ -298,21 +520,6 @@ def main(
             logger.warning(f"Skipping {ep}: not enough folds")
             continue
 
-        # Compute features once for this endpoint
-        smiles = ep_df["SMILES"].tolist()
-        prot_smiles = protonate_at_ph(smiles, ph)
-        ecfp, desc = compute_features(prot_smiles)
-
-        # Remove zero-variance descriptors
-        variance = desc.var(axis=0)
-        nonzero_var = variance > 0
-        desc = desc[:, nonzero_var]
-
-        # Scale descriptors
-        scaler = StandardScaler()
-        desc_scaled = scaler.fit_transform(desc)
-        X_all = np.hstack([ecfp, desc_scaled])
-
         # Activity values
         raw_values = ep_df[ep].values
         if ep in LOG_TRANSFORM_ENDPOINTS:
@@ -320,24 +527,53 @@ def main(
         else:
             y_all = raw_values
 
+        # Compute features once for this endpoint (XGBoost only)
+        if model == "xgboost":
+            smiles = ep_df["SMILES"].tolist()
+            prot_smiles = protonate_at_ph(smiles, ph)
+            ecfp, desc = compute_features(prot_smiles)
+
+            # Remove zero-variance descriptors
+            variance = desc.var(axis=0)
+            nonzero_var = variance > 0
+            desc = desc[:, nonzero_var]
+
+            # Scale descriptors
+            scaler = StandardScaler()
+            desc_scaled = scaler.fit_transform(desc)
+            X_all = np.hstack([ecfp, desc_scaled])
+        else:
+            smiles = ep_df["SMILES"].tolist()
+            all_prot = protonate_at_ph(smiles, ph)
+
         logger.info(f"  {ep}: {len(unique_folds)} folds, {len(cliff_name_set)} cliff molecules")
 
         for fold_id in unique_folds:
             test_mask = fold_ids == fold_id
             train_mask = (fold_ids >= 0) & ~test_mask
 
-            X_tr = X_all[train_mask]
             y_tr = y_all[train_mask]
-            X_te = X_all[test_mask]
             y_te = y_all[test_mask]
             te_names = names[test_mask]
 
             if len(y_te) < 10:
                 continue
 
-            cache_dir = INTERIM_DATA_DIR / "optuna_cache"
-            model, _, _ = tune_xgboost(X_tr, y_tr, cache_dir=cache_dir, cache_key=f"{ep}_cluster_fold{fold_id}")
-            y_pred = model.predict(X_te)
+            if model == "xgboost":
+                X_tr = X_all[train_mask]
+                X_te = X_all[test_mask]
+                model_obj, _, _ = tune_xgboost(X_tr, y_tr, cache_dir=optuna_cache,
+                                               cache_key=f"{ep}_cluster_fold{fold_id}")
+                y_pred = model_obj.predict(X_te)
+            else:
+                train_prot = [all_prot[i] for i in np.where(train_mask)[0]]
+                test_prot = [all_prot[i] for i in np.where(test_mask)[0]]
+                y_pred = train_chemprop(
+                    train_prot, y_tr, test_prot,
+                    cache_dir=chemprop_cache,
+                    cache_key=f"2.10_{ep}_cluster_fold{fold_id}",
+                    checkpoint_dir=model_dir / "models",
+                )
 
             se = (y_te - y_pred) ** 2
             is_cliff = np.array([n in cliff_name_set for n in te_names])
@@ -354,7 +590,7 @@ def main(
                 })
 
     errors_df = pd.DataFrame(error_rows)
-    errors_df.to_csv(output_dir / "cliff_vs_noncliff_errors.csv", index=False)
+    errors_df.to_csv(errors_path, index=False)
     logger.info(f"Saved cliff_vs_noncliff_errors.csv ({len(errors_df)} rows)")
 
     # ── 4. Aggregate metrics: cliff vs non-cliff ──────────────────────
@@ -400,121 +636,12 @@ def main(
             })
 
     metrics_df = pd.DataFrame(metric_rows)
-    metrics_df.to_csv(output_dir / "summary_metrics.csv", index=False)
+    metrics_df.to_csv(metrics_path, index=False)
     logger.info("Saved summary_metrics.csv")
 
-    # ── 5. Figure A: Squared error distributions (3×3 grid) ───────────
-    active_endpoints = sorted(metrics_df["endpoint"].unique())
-    n_ep = len(active_endpoints)
-    nrows = (n_ep + 2) // 3
-    ncols = min(n_ep, 3)
-    fig, axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 4 * nrows))
-    axes = np.atleast_2d(axes).ravel()
-
-    for ax_idx, ep in enumerate(active_endpoints):
-        ax = axes[ax_idx]
-        cliff_se = errors_df[(errors_df["endpoint"] == ep) & (errors_df["is_cliff"])]["squared_error"]
-        noncliff_se = errors_df[(errors_df["endpoint"] == ep) & (~errors_df["is_cliff"])]["squared_error"]
-
-        if cliff_se.empty or noncliff_se.empty:
-            ax.set_visible(False)
-            continue
-
-        all_se = np.concatenate([cliff_se.values, noncliff_se.values])
-        lo = max(all_se.min(), 1e-8)
-        hi = all_se.max()
-        bins = np.logspace(np.log10(lo), np.log10(hi), 40)
-
-        ax.hist(noncliff_se, bins=bins, density=True, alpha=0.6, color="steelblue",
-                label=f"Non-cliff (med={np.median(noncliff_se):.3f})", edgecolor="white")
-        ax.hist(cliff_se, bins=bins, density=True, alpha=0.6, color="coral",
-                label=f"Cliff (med={np.median(cliff_se):.3f})", edgecolor="white")
-
-        ax.set_xscale("log")
-        ax.set_xlabel("Squared error")
-        ax.set_ylabel("Density")
-        ax.set_title(ep, fontsize=10, fontweight="bold")
-        ax.legend(fontsize=7)
-
-    for i in range(n_ep, len(axes)):
-        axes[i].set_visible(False)
-
-    fig.suptitle("Cliff vs non-cliff squared error distributions", fontsize=14, y=1.01)
-    fig.tight_layout()
-    fig.savefig(output_dir / "squared_error_distributions.png", dpi=dpi, bbox_inches="tight")
-    logger.info("Saved squared_error_distributions.png")
-    plt.close("all")
-
-    # ── 6. Figure B: Cliff characterization ───────────────────────────
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-
-    # Left: cliff molecule counts per endpoint
-    ax = axes[0]
-    ep_order = cliff_stats_df.sort_values("pct_cliff", ascending=False)["endpoint"]
-    x = np.arange(len(ep_order))
-    pcts = [cliff_stats_df[cliff_stats_df["endpoint"] == ep]["pct_cliff"].values[0] for ep in ep_order]
-    ax.bar(x, pcts, color="coral", edgecolor="white", alpha=0.8)
-    ax.set_xticks(x)
-    ax.set_xticklabels(ep_order, rotation=45, ha="right", fontsize=8)
-    ax.set_ylabel("% cliff molecules")
-    ax.set_title(f"Activity cliff prevalence (sim>{sim_threshold})")
-
-    # Right: cliff pairs vs n_similar_pairs
-    ax = axes[1]
-    ax.bar(x, [cliff_stats_df[cliff_stats_df["endpoint"] == ep]["n_cliff_pairs"].values[0] for ep in ep_order],
-           color="coral", edgecolor="white", alpha=0.8, label="Cliff pairs")
-    ax.set_xticks(x)
-    ax.set_xticklabels(ep_order, rotation=45, ha="right", fontsize=8)
-    ax.set_ylabel("Number of cliff pairs")
-    ax.set_title("Cliff pair counts per endpoint")
-
-    fig.tight_layout()
-    fig.savefig(output_dir / "cliff_characterization.png", dpi=dpi, bbox_inches="tight")
-    logger.info("Saved cliff_characterization.png")
-    plt.close("all")
-
-    # ── 7. Figure C: Per-metric bar charts ────────────────────────────
-    x = np.arange(len(active_endpoints))
-    width = 0.35
-
-    metric_plots = [
-        ("median_se", "Median squared error", "median_se"),
-        ("mae", "MAE", "mae"),
-        ("r2", "R²", "r2"),
-        ("spearman_r", "Spearman ρ", "spearman"),
-        ("kendall_tau", "Kendall τ", "kendall"),
-        ("rae", "RAE", "rae"),
-    ]
-
-    for col, ylabel, fname in metric_plots:
-        fig, ax = plt.subplots(figsize=(10, 5))
-
-        cliff_vals = []
-        noncliff_vals = []
-        for ep in active_endpoints:
-            cliff_row = metrics_df[(metrics_df["endpoint"] == ep) & (metrics_df["set"] == "cliff")]
-            noncliff_row = metrics_df[(metrics_df["endpoint"] == ep) & (metrics_df["set"] == "non-cliff")]
-            cliff_vals.append(cliff_row[col].values[0] if not cliff_row.empty else np.nan)
-            noncliff_vals.append(noncliff_row[col].values[0] if not noncliff_row.empty else np.nan)
-
-        ax.bar(x - width / 2, noncliff_vals, width, label="Non-cliff",
-               color="steelblue", edgecolor="white", alpha=0.8)
-        ax.bar(x + width / 2, cliff_vals, width, label="Cliff",
-               color="coral", edgecolor="white", alpha=0.8)
-
-        ax.set_xticks(x)
-        ax.set_xticklabels(active_endpoints, rotation=45, ha="right", fontsize=8)
-        ax.set_ylabel(ylabel)
-        ax.set_title(f"Cliff vs non-cliff {ylabel} by endpoint")
-        ax.legend()
-        if col in ("r2",):
-            ax.axhline(y=0, color="gray", linestyle="--", alpha=0.3)
-        fig.tight_layout()
-        fig.savefig(output_dir / f"{fname}_by_endpoint.png", dpi=dpi, bbox_inches="tight")
-        logger.info(f"Saved {fname}_by_endpoint.png")
-        plt.close("all")
-
-    logger.info(f"All outputs saved to {output_dir}")
+    # ── 5. Figures ────────────────────────────────────────────────────
+    _generate_figures(errors_df, metrics_df, model_dir, dpi)
+    logger.info(f"All outputs saved to {model_dir}")
 
 
 @app.command()
@@ -523,6 +650,7 @@ def sensitivity(
         PROCESSED_DATA_DIR / "2.10-seal-activity-cliff-eval", help="Output directory"
     ),
     dpi: int = typer.Option(DEFAULT_DPI, help="DPI for saved figures"),
+    model: str = typer.Option("xgboost", help="Prediction source: xgboost or chemprop"),
     thresholds: str = typer.Option(
         "0.70,0.75,0.80,0.85,0.90,0.95",
         help="Comma-separated Tanimoto similarity thresholds to sweep",
@@ -545,6 +673,13 @@ def sensitivity(
     """
     set_style()
     output_dir.mkdir(parents=True, exist_ok=True)
+    if model not in ("xgboost", "chemprop"):
+        logger.error(f"Unknown model: {model}. Choose xgboost or chemprop.")
+        raise typer.Exit(1)
+
+    _migrate_flat_outputs(output_dir)
+    model_dir = output_dir / model
+    model_dir.mkdir(parents=True, exist_ok=True)
     thresh_list = sorted(float(t) for t in thresholds.split(","))
 
     logger.info("Loading canonical dataset")
@@ -556,13 +691,13 @@ def sensitivity(
     dist_mol_names = npz["molecule_names"]
     name_to_dist_idx = {str(n): i for i, n in enumerate(dist_mol_names)}
 
-    errors_path = output_dir / "cliff_vs_noncliff_errors.csv"
+    errors_path = model_dir / "cliff_vs_noncliff_errors.csv"
     if not errors_path.exists():
         raise FileNotFoundError(
-            f"{errors_path} not found — run `main` first to generate predictions"
+            f"{errors_path} not found — run `main --model {model}` first to generate predictions"
         )
     errors_df = pd.read_csv(errors_path)
-    logger.info(f"Loaded {len(errors_df)} existing test predictions")
+    logger.info(f"Loaded {len(errors_df)} existing {model} test predictions")
 
     rows = []
     pair_records = []
@@ -655,11 +790,11 @@ def sensitivity(
                 pair_records.append({"endpoint": ep, "similarity": float(s), "activity_diff": float(d)})
 
     sens_df = pd.DataFrame(rows)
-    sens_df.to_csv(output_dir / "cliff_sensitivity.csv", index=False)
+    sens_df.to_csv(model_dir / "cliff_sensitivity.csv", index=False)
     logger.info(f"Saved cliff_sensitivity.csv ({len(sens_df)} rows)")
 
     pairs_df = pd.DataFrame(pair_records)
-    pairs_df.to_parquet(output_dir / "cliff_sensitivity_pairs.parquet", index=False)
+    pairs_df.to_parquet(model_dir / "cliff_sensitivity_pairs.parquet", index=False)
     logger.info(f"Saved cliff_sensitivity_pairs.parquet ({len(pairs_df)} pairs)")
 
     # ── Figure: % cliff vs threshold ─────────────────────────────────
@@ -676,7 +811,7 @@ def sensitivity(
     ax.set_title(f"Activity-cliff prevalence vs similarity threshold (|Δactivity| ≥ {min_diff} log)")
     ax.legend(fontsize=8, loc="center left", bbox_to_anchor=(1.02, 0.5))
     fig.tight_layout()
-    fig.savefig(output_dir / "cliff_sensitivity_pct.png", dpi=dpi, bbox_inches="tight")
+    fig.savefig(model_dir / "cliff_sensitivity_pct.png", dpi=dpi, bbox_inches="tight")
     logger.info("Saved cliff_sensitivity_pct.png")
     plt.close("all")
 
@@ -695,7 +830,7 @@ def sensitivity(
     ax.set_title("Cliff error penalty vs similarity threshold")
     ax.legend(fontsize=8, loc="center left", bbox_to_anchor=(1.02, 0.5))
     fig.tight_layout()
-    fig.savefig(output_dir / "cliff_sensitivity_rae_gap.png", dpi=dpi, bbox_inches="tight")
+    fig.savefig(model_dir / "cliff_sensitivity_rae_gap.png", dpi=dpi, bbox_inches="tight")
     logger.info("Saved cliff_sensitivity_rae_gap.png")
     plt.close("all")
 
@@ -727,7 +862,7 @@ def sensitivity(
             y=1.00,
         )
         fig.tight_layout()
-        fig.savefig(output_dir / "cliff_sensitivity_joint.png", dpi=dpi, bbox_inches="tight")
+        fig.savefig(model_dir / "cliff_sensitivity_joint.png", dpi=dpi, bbox_inches="tight")
         logger.info("Saved cliff_sensitivity_joint.png")
         plt.close("all")
 
@@ -787,11 +922,11 @@ def sensitivity(
                 fontsize=16, fontweight="bold", va="bottom", ha="left",
             )
 
-    fig.savefig(output_dir / "cliff_sensitivity_combined.png", dpi=dpi, bbox_inches="tight")
+    fig.savefig(model_dir / "cliff_sensitivity_combined.png", dpi=dpi, bbox_inches="tight")
     logger.info("Saved cliff_sensitivity_combined.png")
     plt.close("all")
 
-    logger.info(f"All sensitivity outputs saved to {output_dir}")
+    logger.info(f"All sensitivity outputs saved to {model_dir}")
 
 
 if __name__ == "__main__":
