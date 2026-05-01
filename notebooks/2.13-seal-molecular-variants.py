@@ -2,23 +2,37 @@
 """Molecular variant consistency analysis (paper Fig S4, ref: Srijit's LinkedIn).
 
 Identifies groups of structurally related molecules (stereoisomers, scaffold
-decorations) and tests whether XGBoost predictions are consistent within groups.
+decorations) and tests whether model predictions are consistent within groups.
 If ECFP fingerprints change significantly for minor structural changes, models
 produce inconsistent predictions — exposing fingerprint artifacts rather than
 learned chemistry.
 
+Supports XGBoost (ECFP4 + RDKit 2D descriptors, Optuna-tuned) and Chemprop
+D-MPNN. Use --combined to generate side-by-side comparison figures once both
+models have been run.
+
 Usage:
     pixi run -e cheminformatics python notebooks/2.13-seal-molecular-variants.py
+    pixi run -e cheminformatics python notebooks/2.13-seal-molecular-variants.py --model chemprop
+    pixi run -e cheminformatics python notebooks/2.13-seal-molecular-variants.py --combined
 
-Outputs:
+Model-agnostic outputs (saved directly to output_dir):
     data/processed/2.13-seal-molecular-variants/variant_groups.csv
     data/processed/2.13-seal-molecular-variants/fingerprint_similarity.csv
-    data/processed/2.13-seal-molecular-variants/consistency_metrics.csv
-    data/processed/2.13-seal-molecular-variants/consistency_summary.csv
-    data/processed/2.13-seal-molecular-variants/fingerprint_distances.png
-    data/processed/2.13-seal-molecular-variants/prediction_consistency.png
-    data/processed/2.13-seal-molecular-variants/consistency_heatmap.png
-    data/processed/2.13-seal-molecular-variants/spread_scatter.png
+    data/processed/2.13-seal-molecular-variants/stereoisomer_activity_diffs.csv
+
+Per-model outputs (saved to output_dir/{model}/):
+    data/processed/2.13-seal-molecular-variants/{model}/consistency_metrics.csv
+    data/processed/2.13-seal-molecular-variants/{model}/consistency_summary.csv
+    data/processed/2.13-seal-molecular-variants/{model}/fingerprint_distances.png
+    data/processed/2.13-seal-molecular-variants/{model}/prediction_consistency.png
+    data/processed/2.13-seal-molecular-variants/{model}/consistency_heatmap.png
+    data/processed/2.13-seal-molecular-variants/{model}/spread_scatter.png
+
+Combined outputs:
+    data/processed/2.13-seal-molecular-variants/combined/consistency_comparison.csv
+    data/processed/2.13-seal-molecular-variants/combined/pred_cv_comparison.png
+    data/processed/2.13-seal-molecular-variants/combined/consistency_ratio_comparison.png
 """
 
 from itertools import combinations
@@ -37,9 +51,14 @@ from rdkit.Chem.Scaffolds import MurckoScaffold
 from rdkit.ML.Descriptors.MoleculeDescriptors import MolecularDescriptorCalculator
 from sklearn.preprocessing import StandardScaler
 
+from polaris_generalization.chemprop_utils import train_chemprop
 from polaris_generalization.config import INTERIM_DATA_DIR, PROCESSED_DATA_DIR
 from polaris_generalization.tuning import tune_xgboost
-from polaris_generalization.visualization import DEFAULT_DPI, set_style
+from polaris_generalization.visualization import (
+    DEFAULT_DPI,
+    plot_model_comparison_bars,
+    set_style,
+)
 
 RDLogger.DisableLog("rdApp.*")
 
@@ -160,6 +179,246 @@ def compute_tanimoto_distances_within_group(
     return distances
 
 
+# ── Migration ─────────────────────────────────────────────────────────────────
+
+def _migrate_flat_outputs(output_dir: Path) -> None:
+    """Move pre-model-flag XGBoost outputs into xgboost/ subdirectory."""
+    flat_files = [
+        "consistency_metrics.csv", "consistency_summary.csv",
+        "fingerprint_distances.png", "prediction_consistency.png",
+        "consistency_heatmap.png", "spread_scatter.png",
+    ]
+    xgboost_dir = output_dir / "xgboost"
+    migrated = []
+    for fname in flat_files:
+        src = output_dir / fname
+        dst = xgboost_dir / fname
+        if src.exists() and not dst.exists():
+            xgboost_dir.mkdir(parents=True, exist_ok=True)
+            src.rename(dst)
+            migrated.append(fname)
+    if migrated:
+        logger.info(f"Migrated {len(migrated)} existing files → xgboost/")
+
+
+# ── Per-model figures ─────────────────────────────────────────────────────────
+
+def _generate_figures(
+    consistency_df: pd.DataFrame,
+    summary_df: pd.DataFrame,
+    fp_sim_df: pd.DataFrame,
+    model_dir: Path,
+    dpi: int,
+) -> None:
+    """Generate per-model figures."""
+
+    # Figure A: Fingerprint distance distributions
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4), sharey=True)
+
+    for ax_idx, vtype in enumerate(VARIANT_ORDER):
+        ax = axes[ax_idx]
+        vtype_dists = fp_sim_df[fp_sim_df["variant_type"] == vtype]["tanimoto_distance"].values
+
+        if len(vtype_dists) == 0:
+            ax.set_visible(False)
+            continue
+
+        ax.hist(
+            vtype_dists, bins=50, density=True,
+            color=VARIANT_COLORS[vtype], edgecolor="white", alpha=0.8,
+        )
+        ax.axvline(
+            np.median(vtype_dists), color="black", linestyle="--", alpha=0.7,
+            label=f"median={np.median(vtype_dists):.3f}",
+        )
+        ax.set_xlabel("Tanimoto distance")
+        if ax_idx == 0:
+            ax.set_ylabel("Density")
+        ax.set_title(vtype.replace("_", " ").title(), fontsize=11, fontweight="bold")
+        ax.legend(fontsize=8)
+
+    fig.suptitle(
+        "Intra-group ECFP4 Tanimoto distances by variant type",
+        fontsize=13, y=1.02,
+    )
+    fig.tight_layout()
+    fig.savefig(model_dir / "fingerprint_distances.png", dpi=dpi, bbox_inches="tight")
+    logger.info("Saved fingerprint_distances.png")
+    plt.close("all")
+
+    # Figure B: Prediction consistency boxplots
+    active_endpoints = sorted(consistency_df["endpoint"].unique())
+    n_ep = len(active_endpoints)
+    nrows = (n_ep + 2) // 3
+    ncols = min(n_ep, 3)
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 4 * nrows))
+    axes = np.atleast_2d(axes).ravel()
+
+    for ax_idx, ep in enumerate(active_endpoints):
+        ax = axes[ax_idx]
+        ep_data = consistency_df[consistency_df["endpoint"] == ep]
+
+        for i, vtype in enumerate(VARIANT_ORDER):
+            vtype_data = ep_data[ep_data["variant_type"] == vtype]["pred_cv"].dropna().values
+            if len(vtype_data) == 0:
+                continue
+            bp = ax.boxplot(
+                vtype_data, positions=[i], widths=0.6,
+                patch_artist=True, showfliers=False,
+            )
+            for patch in bp["boxes"]:
+                patch.set_facecolor(VARIANT_COLORS[vtype])
+                patch.set_alpha(0.7)
+
+        ax.set_xticks(range(len(VARIANT_ORDER)))
+        ax.set_xticklabels(
+            [v.replace("_", "\n") for v in VARIANT_ORDER], fontsize=7,
+        )
+        ax.set_ylabel("Prediction CV", fontsize=9)
+        ax.set_title(ep, fontsize=10, fontweight="bold")
+
+    for i in range(n_ep, len(axes)):
+        axes[i].set_visible(False)
+
+    fig.suptitle(
+        "Within-group prediction CV by variant type and endpoint",
+        fontsize=14, y=1.01,
+    )
+    fig.tight_layout()
+    fig.savefig(model_dir / "prediction_consistency.png", dpi=dpi, bbox_inches="tight")
+    logger.info("Saved prediction_consistency.png")
+    plt.close("all")
+
+    # Figure C: Consistency summary heatmap
+    fig, ax = plt.subplots(figsize=(10, 7))
+
+    heatmap_data = summary_df.pivot(
+        index="endpoint", columns="variant_type", values="pred_cv_mean",
+    )
+    col_order = [c for c in VARIANT_ORDER if c in heatmap_data.columns]
+    heatmap_data = heatmap_data[col_order]
+
+    annot_data = summary_df.pivot(
+        index="endpoint", columns="variant_type", values="n_groups",
+    )
+    annot_data = annot_data[col_order]
+    annot_arr = np.empty(heatmap_data.shape, dtype=object)
+    for i, ep in enumerate(heatmap_data.index):
+        for j, col in enumerate(col_order):
+            val = heatmap_data.loc[ep, col]
+            n = annot_data.loc[ep, col]
+            if pd.notna(val) and pd.notna(n):
+                annot_arr[i, j] = f"{val:.3f}\n(n={int(n)})"
+            else:
+                annot_arr[i, j] = ""
+
+    sns.heatmap(
+        heatmap_data.astype(float), annot=annot_arr, fmt="",
+        cmap="YlOrRd", ax=ax,
+        cbar_kws={"label": "Mean prediction CV"},
+    )
+    ax.set_title("Prediction consistency: mean CV within variant groups", fontsize=12)
+    ax.set_xlabel("Variant type")
+    ax.set_ylabel("")
+
+    fig.tight_layout()
+    fig.savefig(model_dir / "consistency_heatmap.png", dpi=dpi, bbox_inches="tight")
+    logger.info("Saved consistency_heatmap.png")
+    plt.close("all")
+
+    # Figure D: Predicted spread vs true spread scatter
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+
+    for ax_idx, vtype in enumerate(VARIANT_ORDER):
+        ax = axes[ax_idx]
+        vtype_data = consistency_df[consistency_df["variant_type"] == vtype]
+
+        if len(vtype_data) == 0:
+            ax.set_visible(False)
+            continue
+
+        ax.scatter(
+            vtype_data["true_range"], vtype_data["pred_range"],
+            color=VARIANT_COLORS[vtype], alpha=0.3, s=15, edgecolors="none",
+        )
+
+        max_val = max(
+            vtype_data["true_range"].max(),
+            vtype_data["pred_range"].max(),
+        )
+        ax.plot([0, max_val], [0, max_val], "k--", alpha=0.4, label="y = x")
+
+        ax.set_xlabel("True activity range")
+        ax.set_ylabel("Predicted range")
+        ax.set_title(vtype.replace("_", " ").title(), fontsize=11, fontweight="bold")
+        ax.legend(fontsize=8)
+
+    fig.suptitle(
+        "Within-group predicted range vs true activity range",
+        fontsize=13, y=1.02,
+    )
+    fig.tight_layout()
+    fig.savefig(model_dir / "spread_scatter.png", dpi=dpi, bbox_inches="tight")
+    logger.info("Saved spread_scatter.png")
+    plt.close("all")
+
+
+# ── Combined figures ──────────────────────────────────────────────────────────
+
+def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
+    """Load both models' consistency metrics and produce comparison figures."""
+    xgb_path = output_dir / "xgboost" / "consistency_summary.csv"
+    chemprop_path = output_dir / "chemprop" / "consistency_summary.csv"
+
+    missing = [m for m, p in [("xgboost", xgb_path), ("chemprop", chemprop_path)] if not p.exists()]
+    if missing:
+        logger.error(f"Missing results for: {missing}. Run those models first.")
+        return
+
+    combined_dir = output_dir / "combined"
+    combined_dir.mkdir(parents=True, exist_ok=True)
+
+    xgb = pd.read_csv(xgb_path)
+    chemprop = pd.read_csv(chemprop_path)
+
+    # Merge on (variant_type, endpoint) and save comparison CSV
+    merge_cols = ["variant_type", "endpoint", "pred_cv_mean", "pred_cv_median",
+                  "pred_std_mean", "consistency_ratio_mean", "consistency_ratio_median"]
+    comparison_df = (
+        xgb[merge_cols].rename(columns={c: f"{c}_xgboost" for c in merge_cols
+                                        if c not in ("variant_type", "endpoint")})
+        .merge(
+            chemprop[merge_cols].rename(columns={c: f"{c}_chemprop" for c in merge_cols
+                                                 if c not in ("variant_type", "endpoint")}),
+            on=["variant_type", "endpoint"],
+        )
+    )
+    comparison_df.to_csv(combined_dir / "consistency_comparison.csv", index=False)
+    logger.info("Saved consistency_comparison.csv")
+
+    for vtype in VARIANT_ORDER:
+        xgb_vt = xgb[xgb["variant_type"] == vtype].copy()
+        chemprop_vt = chemprop[chemprop["variant_type"] == vtype].copy()
+        if xgb_vt.empty or chemprop_vt.empty:
+            continue
+        vt_data = {"xgboost": xgb_vt, "chemprop": chemprop_vt}
+        vtype_label = vtype.replace("_", " ").title()
+
+        for metric, ylabel, fname in [
+            ("pred_cv_mean", "Mean prediction CV", f"pred_cv_{vtype}"),
+            ("consistency_ratio_mean", "Mean consistency ratio", f"consistency_ratio_{vtype}"),
+        ]:
+            plot_model_comparison_bars(
+                vt_data, "endpoint", metric, ylabel,
+                f"{ylabel} — XGBoost vs Chemprop ({vtype_label})",
+                combined_dir / f"{fname}_comparison.png", dpi=dpi,
+            )
+            logger.info(f"Saved {fname}_comparison.png")
+
+    logger.info(f"Combined figures saved to {combined_dir}")
+
+
 @app.command()
 def main(
     output_dir: Path = typer.Option(
@@ -167,9 +426,24 @@ def main(
     ),
     dpi: int = typer.Option(DEFAULT_DPI, help="DPI for saved figures"),
     max_scaffold_group_size: int = typer.Option(20, help="Max scaffold group size for analysis"),
+    model: str = typer.Option("xgboost", help="Model architecture: xgboost or chemprop"),
+    combined: bool = typer.Option(False, help="Generate combined XGBoost+Chemprop comparison figures"),
 ) -> None:
     set_style()
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    if combined:
+        _generate_combined_figures(output_dir, dpi)
+        return
+
+    if model not in ("xgboost", "chemprop"):
+        logger.error(f"Unknown model: {model}. Choose xgboost or chemprop.")
+        raise typer.Exit(1)
+
+    _migrate_flat_outputs(output_dir)
+
+    model_dir = output_dir / model
+    model_dir.mkdir(parents=True, exist_ok=True)
 
     # ── 1. Load data ──────────────────────────────────────────────────
     logger.info("Loading canonical dataset")
@@ -221,7 +495,7 @@ def main(
         f"{n_scaffold_mols} molecules ({100 * n_scaffold_mols / len(df):.1f}%)"
     )
 
-    # Save variant group membership
+    # Save variant group membership (model-agnostic)
     group_rows = []
     for group_id, (key, indices) in enumerate(stereo_groups.items()):
         for idx in indices:
@@ -290,7 +564,9 @@ def main(
     stereo_activity_df.to_csv(output_dir / "stereoisomer_activity_diffs.csv", index=False)
     logger.info("Saved stereoisomer_activity_diffs.csv")
 
-    # ── 3. Fingerprint similarity within groups ───────────────────────
+    # ── 3. Fingerprint similarity within groups (model-agnostic) ──────
+    # ECFP4 Tanimoto distances are used for variant group identification.
+    # This is independent of model choice.
     logger.info("Computing intra-group Tanimoto distances")
     fp_sim_rows = []
 
@@ -349,10 +625,30 @@ def main(
         f"median={np.median(random_dists):.3f}"
     )
 
+    # ── Skip training if model outputs already exist ──────────────────
+    if (model_dir / "consistency_metrics.csv").exists():
+        logger.info(f"Existing {model} outputs found — regenerating figures only")
+        consistency_df = pd.read_csv(model_dir / "consistency_metrics.csv")
+        summary_df = pd.read_csv(model_dir / "consistency_summary.csv")
+        _generate_figures(consistency_df, summary_df, fp_sim_df, model_dir, dpi)
+        logger.info(f"All outputs saved to {model_dir}")
+        return
+
     # ── 4. Train and collect out-of-fold predictions ──────────────────
-    logger.info("Training XGBoost models and collecting out-of-fold predictions")
+    logger.info(f"Training {model} models and collecting out-of-fold predictions")
     # Store predictions: molecule_name -> {endpoint -> predicted_value}
     oof_predictions: dict[str, dict[str, float]] = {}
+
+    optuna_cache = INTERIM_DATA_DIR / "optuna_cache"
+    chemprop_cache = INTERIM_DATA_DIR / "chemprop_pred_cache"
+
+    # Protonated SMILES per molecule index, keyed by pH (always computed for Chemprop;
+    # for XGBoost this is also the basis for feature computation below).
+    prot_smiles_by_ph: dict[float, list[str]] = {}
+    unique_phs = sorted(set(ENDPOINT_PH.values()))
+    for ph in unique_phs:
+        logger.info(f"Protonating all molecules at pH {ph}")
+        prot_smiles_by_ph[ph] = protonate_at_ph(smiles_all, ph)
 
     for ep in ENDPOINTS:
         ph = ENDPOINT_PH[ep]
@@ -365,23 +661,22 @@ def main(
             continue
 
         ep_names = ep_df["Molecule Name"].values
-        ep_smiles = ep_df["SMILES"].tolist()
-
         raw_values = ep_df[ep].values
         if ep in LOG_TRANSFORM_ENDPOINTS:
             y_all = clip_and_log_transform(raw_values)
         else:
             y_all = raw_values
 
-        # Compute features
-        prot_smiles = protonate_at_ph(ep_smiles, ph)
-        ecfp = compute_ecfp4(prot_smiles)
-        desc = compute_rdkit_descriptors(prot_smiles)
-        variance = desc.var(axis=0)
-        desc = desc[:, variance > 0]
-        scaler = StandardScaler()
-        desc_scaled = scaler.fit_transform(desc)
-        X_all = np.hstack([ecfp, desc_scaled])
+        # ECFP4 + RDKit features: XGBoost training only
+        if model == "xgboost":
+            prot_smiles_ep = [prot_smiles_by_ph[ph][i] for i in np.where(mask)[0]]
+            ecfp = compute_ecfp4(prot_smiles_ep)
+            desc = compute_rdkit_descriptors(prot_smiles_ep)
+            variance = desc.var(axis=0)
+            desc = desc[:, variance > 0]
+            scaler = StandardScaler()
+            desc_scaled = scaler.fit_transform(desc)
+            X_all = np.hstack([ecfp, desc_scaled])
 
         # Get cluster folds for this endpoint
         ep_folds = cluster_folds[cluster_folds["endpoint"] == ep]
@@ -395,15 +690,30 @@ def main(
             test_mask = fold_ids == fold_id
             train_mask = (fold_ids >= 0) & ~test_mask
 
-            X_tr, y_tr = X_all[train_mask], y_all[train_mask]
-            X_te, y_te = X_all[test_mask], y_all[test_mask]
+            y_tr = y_all[train_mask]
+            y_te = y_all[test_mask]
 
             if len(y_te) < 10 or len(y_tr) < 10:
                 continue
 
-            cache_dir = INTERIM_DATA_DIR / "optuna_cache"
-            model, _, _ = tune_xgboost(X_tr, y_tr, cache_dir=cache_dir, cache_key=f"{ep}_cluster_fold{fold_id}")
-            y_pred = model.predict(X_te)
+            if model == "xgboost":
+                X_tr = X_all[train_mask]
+                X_te = X_all[test_mask]
+                model_obj, _, _ = tune_xgboost(
+                    X_tr, y_tr, cache_dir=optuna_cache,
+                    cache_key=f"{ep}_cluster_fold{fold_id}",
+                )
+                y_pred = model_obj.predict(X_te)
+            else:
+                # Chemprop: use protonated SMILES per pH, indexed back to ep subset
+                ep_indices = np.where(mask)[0]
+                train_prot_ep = [prot_smiles_by_ph[ph][ep_indices[i]] for i in np.where(train_mask)[0]]
+                test_prot_ep = [prot_smiles_by_ph[ph][ep_indices[i]] for i in np.where(test_mask)[0]]
+                y_pred = train_chemprop(
+                    train_prot_ep, y_tr, test_prot_ep,
+                    cache_dir=chemprop_cache,
+                    cache_key=f"2.13_{ep}_cluster_fold{fold_id}",
+                )
 
             # Store out-of-fold predictions
             test_names = ep_names[test_mask]
@@ -417,8 +727,6 @@ def main(
     # ── 5. Compute within-group consistency ───────────────────────────
     logger.info("Computing within-group prediction consistency")
     consistency_rows = []
-
-    name_to_idx = {n: i for i, n in enumerate(names_all)}
 
     for vtype, groups in all_variant_groups.items():
         for group_key, indices in groups.items():
@@ -510,7 +818,7 @@ def main(
             })
 
     consistency_df = pd.DataFrame(consistency_rows)
-    consistency_df.to_csv(output_dir / "consistency_metrics.csv", index=False)
+    consistency_df.to_csv(model_dir / "consistency_metrics.csv", index=False)
     logger.info(f"Saved consistency_metrics.csv ({len(consistency_df)} rows)")
 
     # ── 6. Aggregate consistency summary ──────────────────────────────
@@ -531,7 +839,7 @@ def main(
         })
 
     summary_df = pd.DataFrame(summary_rows)
-    summary_df.to_csv(output_dir / "consistency_summary.csv", index=False)
+    summary_df.to_csv(model_dir / "consistency_summary.csv", index=False)
     logger.info("Saved consistency_summary.csv")
 
     for _, row in summary_df.iterrows():
@@ -542,161 +850,10 @@ def main(
             f"consistency_ratio={row['consistency_ratio_mean']:.3f}"
         )
 
-    # ── 7. Figure A: Fingerprint distance distributions ───────────────
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4), sharey=True)
+    # ── 7. Generate figures ───────────────────────────────────────────
+    _generate_figures(consistency_df, summary_df, fp_sim_df, model_dir, dpi)
 
-    for ax_idx, vtype in enumerate(VARIANT_ORDER):
-        ax = axes[ax_idx]
-        vtype_dists = fp_sim_df[fp_sim_df["variant_type"] == vtype]["tanimoto_distance"].values
-
-        if len(vtype_dists) == 0:
-            ax.set_visible(False)
-            continue
-
-        ax.hist(
-            vtype_dists, bins=50, density=True,
-            color=VARIANT_COLORS[vtype], edgecolor="white", alpha=0.8,
-        )
-        ax.axvline(
-            np.median(vtype_dists), color="black", linestyle="--", alpha=0.7,
-            label=f"median={np.median(vtype_dists):.3f}",
-        )
-        ax.set_xlabel("Tanimoto distance")
-        if ax_idx == 0:
-            ax.set_ylabel("Density")
-        ax.set_title(vtype.replace("_", " ").title(), fontsize=11, fontweight="bold")
-        ax.legend(fontsize=8)
-
-    fig.suptitle(
-        "Intra-group ECFP4 Tanimoto distances by variant type",
-        fontsize=13, y=1.02,
-    )
-    fig.tight_layout()
-    fig.savefig(output_dir / "fingerprint_distances.png", dpi=dpi, bbox_inches="tight")
-    logger.info("Saved fingerprint_distances.png")
-    plt.close("all")
-
-    # ── 8. Figure B: Prediction consistency boxplots ──────────────────
-    active_endpoints = sorted(consistency_df["endpoint"].unique())
-    n_ep = len(active_endpoints)
-    nrows = (n_ep + 2) // 3
-    ncols = min(n_ep, 3)
-
-    fig, axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 4 * nrows))
-    axes = np.atleast_2d(axes).ravel()
-
-    for ax_idx, ep in enumerate(active_endpoints):
-        ax = axes[ax_idx]
-        ep_data = consistency_df[consistency_df["endpoint"] == ep]
-
-        for i, vtype in enumerate(VARIANT_ORDER):
-            vtype_data = ep_data[ep_data["variant_type"] == vtype]["pred_cv"].dropna().values
-            if len(vtype_data) == 0:
-                continue
-            bp = ax.boxplot(
-                vtype_data, positions=[i], widths=0.6,
-                patch_artist=True, showfliers=False,
-            )
-            for patch in bp["boxes"]:
-                patch.set_facecolor(VARIANT_COLORS[vtype])
-                patch.set_alpha(0.7)
-
-        ax.set_xticks(range(len(VARIANT_ORDER)))
-        ax.set_xticklabels(
-            [v.replace("_", "\n") for v in VARIANT_ORDER], fontsize=7,
-        )
-        ax.set_ylabel("Prediction CV", fontsize=9)
-        ax.set_title(ep, fontsize=10, fontweight="bold")
-
-    for i in range(n_ep, len(axes)):
-        axes[i].set_visible(False)
-
-    fig.suptitle(
-        "Within-group prediction CV by variant type and endpoint",
-        fontsize=14, y=1.01,
-    )
-    fig.tight_layout()
-    fig.savefig(output_dir / "prediction_consistency.png", dpi=dpi, bbox_inches="tight")
-    logger.info("Saved prediction_consistency.png")
-    plt.close("all")
-
-    # ── 9. Figure C: Consistency summary heatmap ──────────────────────
-    fig, ax = plt.subplots(figsize=(10, 7))
-
-    heatmap_data = summary_df.pivot(
-        index="endpoint", columns="variant_type", values="pred_cv_mean",
-    )
-    # Reorder columns
-    col_order = [c for c in VARIANT_ORDER if c in heatmap_data.columns]
-    heatmap_data = heatmap_data[col_order]
-
-    # Build annotation with group counts
-    annot_data = summary_df.pivot(
-        index="endpoint", columns="variant_type", values="n_groups",
-    )
-    annot_data = annot_data[col_order]
-    annot_arr = np.empty(heatmap_data.shape, dtype=object)
-    for i, ep in enumerate(heatmap_data.index):
-        for j, col in enumerate(col_order):
-            val = heatmap_data.loc[ep, col]
-            n = annot_data.loc[ep, col]
-            if pd.notna(val) and pd.notna(n):
-                annot_arr[i, j] = f"{val:.3f}\n(n={int(n)})"
-            else:
-                annot_arr[i, j] = ""
-
-    sns.heatmap(
-        heatmap_data.astype(float), annot=annot_arr, fmt="",
-        cmap="YlOrRd", ax=ax,
-        cbar_kws={"label": "Mean prediction CV"},
-    )
-    ax.set_title("Prediction consistency: mean CV within variant groups", fontsize=12)
-    ax.set_xlabel("Variant type")
-    ax.set_ylabel("")
-
-    fig.tight_layout()
-    fig.savefig(output_dir / "consistency_heatmap.png", dpi=dpi, bbox_inches="tight")
-    logger.info("Saved consistency_heatmap.png")
-    plt.close("all")
-
-    # ── 10. Figure D: Predicted spread vs true spread scatter ─────────
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-
-    for ax_idx, vtype in enumerate(VARIANT_ORDER):
-        ax = axes[ax_idx]
-        vtype_data = consistency_df[consistency_df["variant_type"] == vtype]
-
-        if len(vtype_data) == 0:
-            ax.set_visible(False)
-            continue
-
-        ax.scatter(
-            vtype_data["true_range"], vtype_data["pred_range"],
-            color=VARIANT_COLORS[vtype], alpha=0.3, s=15, edgecolors="none",
-        )
-
-        # Diagonal reference line
-        max_val = max(
-            vtype_data["true_range"].max(),
-            vtype_data["pred_range"].max(),
-        )
-        ax.plot([0, max_val], [0, max_val], "k--", alpha=0.4, label="y = x")
-
-        ax.set_xlabel("True activity range")
-        ax.set_ylabel("Predicted range")
-        ax.set_title(vtype.replace("_", " ").title(), fontsize=11, fontweight="bold")
-        ax.legend(fontsize=8)
-
-    fig.suptitle(
-        "Within-group predicted range vs true activity range",
-        fontsize=13, y=1.02,
-    )
-    fig.tight_layout()
-    fig.savefig(output_dir / "spread_scatter.png", dpi=dpi, bbox_inches="tight")
-    logger.info("Saved spread_scatter.png")
-    plt.close("all")
-
-    logger.info(f"All outputs saved to {output_dir}")
+    logger.info(f"All outputs saved to {model_dir}")
 
 
 if __name__ == "__main__":
