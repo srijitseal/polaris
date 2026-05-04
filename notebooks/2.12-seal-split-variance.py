@@ -8,7 +8,7 @@ intervals rather than single point estimates.
 
 Usage:
     pixi run -e cheminformatics python notebooks/2.12-seal-split-variance.py
-    pixi run -e cheminformatics python notebooks/2.12-seal-split-variance.py --model chemprop
+    pixi run -e cheminformatics python notebooks/2.12-seal-split-variance.py --model chemeleon
     pixi run -e cheminformatics python notebooks/2.12-seal-split-variance.py --combined
 
 Outputs (per model, under data/processed/2.12-seal-split-variance/<model>/):
@@ -42,7 +42,7 @@ from scipy.stats import kendalltau, mannwhitneyu, spearmanr
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.preprocessing import StandardScaler
 
-from polaris_generalization.chemprop_utils import train_chemprop
+from polaris_generalization.chemprop_utils import train_chemeleon
 from polaris_generalization.config import INTERIM_DATA_DIR, PROCESSED_DATA_DIR
 from polaris_generalization.tuning import tune_xgboost
 from polaris_generalization.visualization import (
@@ -370,15 +370,15 @@ def _save_figures(
 def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
     """Load both models' variance_summary.csv and produce combined comparison figures."""
     xgb_path = output_dir / "xgboost" / "variance_summary.csv"
-    chemprop_path = output_dir / "chemprop" / "variance_summary.csv"
+    chemeleon_path = output_dir / "chemeleon" / "variance_summary.csv"
 
-    missing = [p for p in [xgb_path, chemprop_path] if not p.exists()]
+    missing = [p for p in [xgb_path, chemeleon_path] if not p.exists()]
     if missing:
         logger.error(f"Cannot generate combined figures — missing: {[str(p) for p in missing]}")
         return
 
     xgb_df = pd.read_csv(xgb_path)
-    chemprop_df = pd.read_csv(chemprop_path)
+    chemeleon_df = pd.read_csv(chemeleon_path)
 
     metrics = [
         ("mae_mean", "MAE"),
@@ -389,19 +389,19 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
 
     for strategy in STRATEGY_ORDER:
         xgb_strat = xgb_df[xgb_df["strategy"] == strategy].copy()
-        chemprop_strat = chemprop_df[chemprop_df["strategy"] == strategy].copy()
+        chemeleon_strat = chemeleon_df[chemeleon_df["strategy"] == strategy].copy()
 
-        if xgb_strat.empty and chemprop_strat.empty:
+        if xgb_strat.empty and chemeleon_strat.empty:
             continue
 
         for metric_col, ylabel in metrics:
             out_path = output_dir / f"combined_{strategy}_{metric_col.replace('_mean', '')}.png"
             plot_model_comparison_bars(
-                data_by_model={"xgboost": xgb_strat, "chemprop": chemprop_strat},
+                data_by_model={"xgboost": xgb_strat, "chemeleon": chemeleon_strat},
                 endpoint_col="endpoint",
                 metric_col=metric_col,
                 ylabel=ylabel,
-                title=f"{ylabel} variance ({strategy} split): XGBoost vs Chemprop",
+                title=f"{ylabel} variance ({strategy} split): XGBoost vs CheMeleon",
                 output_path=out_path,
                 dpi=dpi,
             )
@@ -417,8 +417,8 @@ def main(
     ),
     dpi: int = typer.Option(DEFAULT_DPI, help="DPI for saved figures"),
     n_random_repeats: int = typer.Option(5, help="Number of random split repeats"),
-    model: str = typer.Option("xgboost", help="Model architecture: xgboost or chemprop"),
-    combined: bool = typer.Option(False, help="Generate combined XGBoost+Chemprop comparison figures"),
+    model: str = typer.Option("xgboost", help="Model architecture: xgboost or chemeleon"),
+    combined: bool = typer.Option(False, help="Generate combined XGBoost+CheMeleon comparison figures"),
 ) -> None:
     set_style()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -442,7 +442,7 @@ def main(
     logger.info(f"Cluster folds: {len(cluster_folds)} rows, {n_cluster_repeats} repeats")
 
     # Skip training if key outputs already exist
-    if (model_dir / "summary_metrics.csv").exists():
+    if (model_dir / "predictions.parquet").exists():
         logger.info(f"Existing {model} outputs found — regenerating figures only")
         summary_df = pd.read_csv(model_dir / "summary_metrics.csv")
         repeat_agg = pd.read_csv(model_dir / "repeat_aggregates.csv")
@@ -451,10 +451,11 @@ def main(
         logger.info(f"Figures regenerated in {model_dir}")
         return
 
-    chemprop_cache = INTERIM_DATA_DIR / "chemprop_pred_cache"
+    chemprop_cache = model_dir / "pred_cache"
 
     # ── 2. Train and evaluate per strategy per repeat per endpoint ────
     metric_rows = []
+    pred_rows = []
 
     for ep in ENDPOINTS:
         ph = ENDPOINT_PH[ep]
@@ -476,7 +477,7 @@ def main(
         else:
             y_all = raw_values
 
-        # Always: protonate (needed for both XGBoost and Chemprop)
+        # Always: protonate (needed for both XGBoost and CheMeleon)
         prot_smiles = protonate_at_ph(smiles, ph)
 
         # XGBoost only: feature computation (shared across all repeats)
@@ -515,10 +516,9 @@ def main(
                 else:
                     train_prot = [prot_smiles[i] for i in np.where(train_mask)[0]]
                     test_prot = [prot_smiles[i] for i in np.where(test_mask)[0]]
-                    y_pred = train_chemprop(train_prot, y_tr, test_prot,
-                                           cache_dir=chemprop_cache,
-                                           cache_key=f"2.12_{ep}_random_r{repeat}_fold{fold_id}",
-                                           checkpoint_dir=model_dir / "models")
+                    y_pred = train_chemeleon(train_prot, y_tr, test_prot,
+                                            cache_dir=chemprop_cache,
+                                            cache_key=f"2.12_{ep}_random_r{repeat}_fold{fold_id}")
 
                 mae = mean_absolute_error(y_te, y_pred)
                 r2 = r2_score(y_te, y_pred)
@@ -540,6 +540,18 @@ def main(
                     "kendall_tau": kt,
                     "rae": rae,
                 })
+
+                te_names = names[test_mask]
+                for i in range(len(y_te)):
+                    pred_rows.append({
+                        "Molecule Name": te_names[i],
+                        "endpoint": ep,
+                        "strategy": "random",
+                        "repeat": repeat,
+                        "fold": fold_id,
+                        "y_true": float(y_te[i]),
+                        "y_pred": float(y_pred[i]),
+                    })
 
         logger.info(f"    random: {n_random_repeats} repeats done")
 
@@ -569,10 +581,9 @@ def main(
                 else:
                     train_prot = [prot_smiles[i] for i in np.where(train_mask)[0]]
                     test_prot = [prot_smiles[i] for i in np.where(test_mask)[0]]
-                    y_pred = train_chemprop(train_prot, y_tr, test_prot,
-                                           cache_dir=chemprop_cache,
-                                           cache_key=f"2.12_{ep}_cluster_r{repeat}_fold{fold_id}",
-                                           checkpoint_dir=model_dir / "models")
+                    y_pred = train_chemeleon(train_prot, y_tr, test_prot,
+                                            cache_dir=chemprop_cache,
+                                            cache_key=f"2.12_{ep}_cluster_r{repeat}_fold{fold_id}")
 
                 mae = mean_absolute_error(y_te, y_pred)
                 r2 = r2_score(y_te, y_pred)
@@ -595,9 +606,25 @@ def main(
                     "rae": rae,
                 })
 
+                te_names = names[test_mask]
+                for i in range(len(y_te)):
+                    pred_rows.append({
+                        "Molecule Name": te_names[i],
+                        "endpoint": ep,
+                        "strategy": "cluster",
+                        "repeat": repeat,
+                        "fold": fold_id,
+                        "y_true": float(y_te[i]),
+                        "y_pred": float(y_pred[i]),
+                    })
+
         logger.info(f"    cluster: {n_cluster_repeats} repeats done")
 
-    # ── 3. Save per-fold metrics ──────────────────────────────────────
+    # ── 3. Save per-fold metrics and per-molecule predictions ─────────
+    pred_df = pd.DataFrame(pred_rows)
+    pred_df.to_parquet(model_dir / "predictions.parquet", index=False)
+    logger.info(f"Saved predictions.parquet ({len(pred_df)} rows)")
+
     summary_df = pd.DataFrame(metric_rows)
     summary_df.to_csv(model_dir / "summary_metrics.csv", index=False)
     logger.info(f"Saved summary_metrics.csv ({len(summary_df)} rows)")

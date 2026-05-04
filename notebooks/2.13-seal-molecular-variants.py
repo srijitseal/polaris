@@ -7,13 +7,13 @@ If ECFP fingerprints change significantly for minor structural changes, models
 produce inconsistent predictions — exposing fingerprint artifacts rather than
 learned chemistry.
 
-Supports XGBoost (ECFP4 + RDKit 2D descriptors, Optuna-tuned) and Chemprop
-D-MPNN. Use --combined to generate side-by-side comparison figures once both
+Supports XGBoost (ECFP4 + RDKit 2D descriptors, Optuna-tuned) and CheMeleon.
+Use --combined to generate side-by-side comparison figures once both
 models have been run.
 
 Usage:
     pixi run -e cheminformatics python notebooks/2.13-seal-molecular-variants.py
-    pixi run -e cheminformatics python notebooks/2.13-seal-molecular-variants.py --model chemprop
+    pixi run -e cheminformatics python notebooks/2.13-seal-molecular-variants.py --model chemeleon
     pixi run -e cheminformatics python notebooks/2.13-seal-molecular-variants.py --combined
 
 Model-agnostic outputs (saved directly to output_dir):
@@ -51,7 +51,7 @@ from rdkit.Chem.Scaffolds import MurckoScaffold
 from rdkit.ML.Descriptors.MoleculeDescriptors import MolecularDescriptorCalculator
 from sklearn.preprocessing import StandardScaler
 
-from polaris_generalization.chemprop_utils import train_chemprop
+from polaris_generalization.chemprop_utils import train_chemeleon
 from polaris_generalization.config import INTERIM_DATA_DIR, PROCESSED_DATA_DIR
 from polaris_generalization.tuning import tune_xgboost
 from polaris_generalization.visualization import (
@@ -369,9 +369,9 @@ def _generate_figures(
 def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
     """Load both models' consistency metrics and produce comparison figures."""
     xgb_path = output_dir / "xgboost" / "consistency_summary.csv"
-    chemprop_path = output_dir / "chemprop" / "consistency_summary.csv"
+    chemeleon_path = output_dir / "chemeleon" / "consistency_summary.csv"
 
-    missing = [m for m, p in [("xgboost", xgb_path), ("chemprop", chemprop_path)] if not p.exists()]
+    missing = [m for m, p in [("xgboost", xgb_path), ("chemeleon", chemeleon_path)] if not p.exists()]
     if missing:
         logger.error(f"Missing results for: {missing}. Run those models first.")
         return
@@ -380,7 +380,7 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
     combined_dir.mkdir(parents=True, exist_ok=True)
 
     xgb = pd.read_csv(xgb_path)
-    chemprop = pd.read_csv(chemprop_path)
+    chemeleon = pd.read_csv(chemeleon_path)
 
     # Merge on (variant_type, endpoint) and save comparison CSV
     merge_cols = ["variant_type", "endpoint", "pred_cv_mean", "pred_cv_median",
@@ -389,8 +389,8 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
         xgb[merge_cols].rename(columns={c: f"{c}_xgboost" for c in merge_cols
                                         if c not in ("variant_type", "endpoint")})
         .merge(
-            chemprop[merge_cols].rename(columns={c: f"{c}_chemprop" for c in merge_cols
-                                                 if c not in ("variant_type", "endpoint")}),
+            chemeleon[merge_cols].rename(columns={c: f"{c}_chemeleon" for c in merge_cols
+                                                  if c not in ("variant_type", "endpoint")}),
             on=["variant_type", "endpoint"],
         )
     )
@@ -399,10 +399,10 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
 
     for vtype in VARIANT_ORDER:
         xgb_vt = xgb[xgb["variant_type"] == vtype].copy()
-        chemprop_vt = chemprop[chemprop["variant_type"] == vtype].copy()
-        if xgb_vt.empty or chemprop_vt.empty:
+        chemeleon_vt = chemeleon[chemeleon["variant_type"] == vtype].copy()
+        if xgb_vt.empty or chemeleon_vt.empty:
             continue
-        vt_data = {"xgboost": xgb_vt, "chemprop": chemprop_vt}
+        vt_data = {"xgboost": xgb_vt, "chemeleon": chemeleon_vt}
         vtype_label = vtype.replace("_", " ").title()
 
         for metric, ylabel, fname in [
@@ -411,7 +411,7 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
         ]:
             plot_model_comparison_bars(
                 vt_data, "endpoint", metric, ylabel,
-                f"{ylabel} — XGBoost vs Chemprop ({vtype_label})",
+                f"{ylabel} — XGBoost vs CheMeleon ({vtype_label})",
                 combined_dir / f"{fname}_comparison.png", dpi=dpi,
             )
             logger.info(f"Saved {fname}_comparison.png")
@@ -426,8 +426,8 @@ def main(
     ),
     dpi: int = typer.Option(DEFAULT_DPI, help="DPI for saved figures"),
     max_scaffold_group_size: int = typer.Option(20, help="Max scaffold group size for analysis"),
-    model: str = typer.Option("xgboost", help="Model architecture: xgboost or chemprop"),
-    combined: bool = typer.Option(False, help="Generate combined XGBoost+Chemprop comparison figures"),
+    model: str = typer.Option("xgboost", help="Model architecture: xgboost or chemeleon"),
+    combined: bool = typer.Option(False, help="Generate combined XGBoost+CheMeleon comparison figures"),
 ) -> None:
     set_style()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -436,8 +436,8 @@ def main(
         _generate_combined_figures(output_dir, dpi)
         return
 
-    if model not in ("xgboost", "chemprop"):
-        logger.error(f"Unknown model: {model}. Choose xgboost or chemprop.")
+    if model not in ("xgboost", "chemeleon"):
+        logger.error(f"Unknown model: {model}. Choose xgboost or chemeleon.")
         raise typer.Exit(1)
 
     _migrate_flat_outputs(output_dir)
@@ -626,7 +626,7 @@ def main(
     )
 
     # ── Skip training if model outputs already exist ──────────────────
-    if (model_dir / "consistency_metrics.csv").exists():
+    if (model_dir / "predictions.parquet").exists():
         logger.info(f"Existing {model} outputs found — regenerating figures only")
         consistency_df = pd.read_csv(model_dir / "consistency_metrics.csv")
         summary_df = pd.read_csv(model_dir / "consistency_summary.csv")
@@ -640,9 +640,9 @@ def main(
     oof_predictions: dict[str, dict[str, float]] = {}
 
     optuna_cache = INTERIM_DATA_DIR / "optuna_cache"
-    chemprop_cache = INTERIM_DATA_DIR / "chemprop_pred_cache"
+    chemprop_cache = model_dir / "pred_cache"
 
-    # Protonated SMILES per molecule index, keyed by pH (always computed for Chemprop;
+    # Protonated SMILES per molecule index, keyed by pH (always computed for CheMeleon;
     # for XGBoost this is also the basis for feature computation below).
     prot_smiles_by_ph: dict[float, list[str]] = {}
     unique_phs = sorted(set(ENDPOINT_PH.values()))
@@ -705,15 +705,14 @@ def main(
                 )
                 y_pred = model_obj.predict(X_te)
             else:
-                # Chemprop: use protonated SMILES per pH, indexed back to ep subset
+                # CheMeleon: use protonated SMILES per pH, indexed back to ep subset
                 ep_indices = np.where(mask)[0]
                 train_prot_ep = [prot_smiles_by_ph[ph][ep_indices[i]] for i in np.where(train_mask)[0]]
                 test_prot_ep = [prot_smiles_by_ph[ph][ep_indices[i]] for i in np.where(test_mask)[0]]
-                y_pred = train_chemprop(
+                y_pred = train_chemeleon(
                     train_prot_ep, y_tr, test_prot_ep,
                     cache_dir=chemprop_cache,
-                    cache_key=f"2.13_{ep}_cluster_fold{fold_id}",
-                    checkpoint_dir=model_dir / "models",
+                    cache_key=f"2.13_{ep}_cluster_fold{fold_id}"
                 )
 
             # Store out-of-fold predictions
@@ -724,6 +723,14 @@ def main(
                 oof_predictions[name][ep] = {"pred": float(pred), "true": float(true)}
 
     logger.info(f"Collected predictions for {len(oof_predictions)} molecules")
+
+    pred_rows = [
+        {"Molecule Name": name, "endpoint": ep, "y_true": v["true"], "y_pred": v["pred"]}
+        for name, ep_dict in oof_predictions.items()
+        for ep, v in ep_dict.items()
+    ]
+    pd.DataFrame(pred_rows).to_parquet(model_dir / "predictions.parquet", index=False)
+    logger.info(f"Saved predictions.parquet ({len(pred_rows)} rows)")
 
     # ── 5. Compute within-group consistency ───────────────────────────
     logger.info("Computing within-group prediction consistency")

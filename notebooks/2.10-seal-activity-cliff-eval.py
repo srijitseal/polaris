@@ -2,7 +2,7 @@
 """Activity cliff evaluation (paper Fig S3, ref: MoleculeACE).
 
 Identifies activity cliffs — pairs of structurally similar molecules with large
-activity differences — and evaluates XGBoost or Chemprop D-MPNN performance on
+activity differences — and evaluates XGBoost or CheMeleon performance on
 cliff vs non-cliff molecules. Uses cluster-split CV (repeat 0, 5 folds) to train
 and evaluate. Demonstrates that smoothly interpolating models fail on activity cliffs.
 
@@ -10,15 +10,15 @@ Usage:
     # Full eval (default XGBoost)
     pixi run -e cheminformatics python notebooks/2.10-seal-activity-cliff-eval.py main
 
-    # Full eval with Chemprop D-MPNN
-    pixi run -e cheminformatics python notebooks/2.10-seal-activity-cliff-eval.py main --model chemprop
+    # Full eval with CheMeleon
+    pixi run -e cheminformatics python notebooks/2.10-seal-activity-cliff-eval.py main --model chemeleon
 
-    # Combined XGBoost vs Chemprop comparison figures
+    # Combined XGBoost vs CheMeleon comparison figures
     pixi run -e cheminformatics python notebooks/2.10-seal-activity-cliff-eval.py main --combined
 
     # Threshold-sensitivity sweep using existing model predictions
     pixi run -e cheminformatics python notebooks/2.10-seal-activity-cliff-eval.py sensitivity
-    pixi run -e cheminformatics python notebooks/2.10-seal-activity-cliff-eval.py sensitivity --model chemprop
+    pixi run -e cheminformatics python notebooks/2.10-seal-activity-cliff-eval.py sensitivity --model chemeleon
 
 Model-agnostic outputs:
     data/processed/2.10-seal-activity-cliff-eval/cliff_stats.csv
@@ -26,6 +26,7 @@ Model-agnostic outputs:
     data/processed/2.10-seal-activity-cliff-eval/cliff_characterization.png
 
 Outputs (per model, main):
+    data/processed/2.10-seal-activity-cliff-eval/{model}/predictions.parquet
     data/processed/2.10-seal-activity-cliff-eval/{model}/cliff_vs_noncliff_errors.csv
     data/processed/2.10-seal-activity-cliff-eval/{model}/summary_metrics.csv
     data/processed/2.10-seal-activity-cliff-eval/{model}/squared_error_distributions.png
@@ -62,7 +63,7 @@ from scipy.stats import kendalltau, spearmanr
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.preprocessing import StandardScaler
 
-from polaris_generalization.chemprop_utils import train_chemprop
+from polaris_generalization.chemprop_utils import train_chemeleon
 from polaris_generalization.config import INTERIM_DATA_DIR, PROCESSED_DATA_DIR
 from polaris_generalization.tuning import tune_xgboost
 from polaris_generalization.visualization import (
@@ -310,9 +311,9 @@ def _generate_figures(errors_df: pd.DataFrame, metrics_df: pd.DataFrame,
 def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
     """Load both models' metrics and produce side-by-side comparison figures."""
     xgb_path = output_dir / "xgboost" / "summary_metrics.csv"
-    chemprop_path = output_dir / "chemprop" / "summary_metrics.csv"
+    chemeleon_path = output_dir / "chemeleon" / "summary_metrics.csv"
 
-    missing = [m for m, p in [("xgboost", xgb_path), ("chemprop", chemprop_path)] if not p.exists()]
+    missing = [m for m, p in [("xgboost", xgb_path), ("chemeleon", chemeleon_path)] if not p.exists()]
     if missing:
         logger.error(f"Missing results for: {missing}. Run those models first.")
         return
@@ -321,12 +322,12 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
     combined_dir.mkdir(parents=True, exist_ok=True)
 
     xgb = pd.read_csv(xgb_path)
-    chemprop = pd.read_csv(chemprop_path)
+    chemeleon = pd.read_csv(chemeleon_path)
 
     for set_label in ("cliff", "non-cliff"):
         xgb_set = xgb[xgb["set"] == set_label].copy()
-        chemprop_set = chemprop[chemprop["set"] == set_label].copy()
-        data_by_model = {"xgboost": xgb_set, "chemprop": chemprop_set}
+        chemeleon_set = chemeleon[chemeleon["set"] == set_label].copy()
+        data_by_model = {"xgboost": xgb_set, "chemeleon": chemeleon_set}
 
         fname_label = set_label.replace("-", "")
         for metric, ylabel, fname in [
@@ -337,7 +338,7 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
         ]:
             plot_model_comparison_bars(
                 data_by_model, "endpoint", metric, ylabel,
-                f"{ylabel} — XGBoost vs Chemprop ({set_label})",
+                f"{ylabel} — XGBoost vs CheMeleon ({set_label})",
                 combined_dir / f"{fname}_{fname_label}_comparison.png", dpi=dpi,
             )
             logger.info(f"Saved {fname}_{fname_label}_comparison.png")
@@ -353,8 +354,8 @@ def main(
     dpi: int = typer.Option(DEFAULT_DPI, help="DPI for saved figures"),
     sim_threshold: float = typer.Option(0.85, help="Tanimoto similarity threshold for similar pairs"),
     min_diff: float = typer.Option(1.0, help="Absolute activity difference threshold for cliff definition"),
-    model: str = typer.Option("xgboost", help="Model architecture: xgboost or chemprop"),
-    combined: bool = typer.Option(False, help="Generate combined XGBoost+Chemprop comparison figures"),
+    model: str = typer.Option("xgboost", help="Model architecture: xgboost or chemeleon"),
+    combined: bool = typer.Option(False, help="Generate combined XGBoost+CheMeleon comparison figures"),
 ) -> None:
     set_style()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -363,8 +364,8 @@ def main(
         _generate_combined_figures(output_dir, dpi)
         return
 
-    if model not in ("xgboost", "chemprop"):
-        logger.error(f"Unknown model: {model}. Choose xgboost or chemprop.")
+    if model not in ("xgboost", "chemeleon"):
+        logger.error(f"Unknown model: {model}. Choose xgboost or chemeleon.")
         raise typer.Exit(1)
 
     _migrate_flat_outputs(output_dir)
@@ -486,11 +487,12 @@ def main(
     plt.close("all")
 
     # Skip training if outputs already exist
+    pred_path = model_dir / "predictions.parquet"
     errors_path = model_dir / "cliff_vs_noncliff_errors.csv"
     metrics_path = model_dir / "summary_metrics.csv"
-    if errors_path.exists() and metrics_path.exists():
-        logger.info(f"Existing {model} outputs found — regenerating figures only")
-        errors_df = pd.read_csv(errors_path)
+    if pred_path.exists():
+        logger.info(f"Existing {model} predictions found — regenerating figures only")
+        errors_df = pd.read_parquet(pred_path)
         metrics_df = pd.read_csv(metrics_path)
         _generate_figures(errors_df, metrics_df, model_dir, dpi)
         logger.info("Figures regenerated (no models retrained)")
@@ -501,7 +503,7 @@ def main(
     metric_rows = []
 
     optuna_cache = INTERIM_DATA_DIR / "optuna_cache"
-    chemprop_cache = INTERIM_DATA_DIR / "chemprop_pred_cache"
+    chemprop_cache = model_dir / "pred_cache"
 
     for ep in ENDPOINTS:
         ph = ENDPOINT_PH[ep]
@@ -568,11 +570,10 @@ def main(
             else:
                 train_prot = [all_prot[i] for i in np.where(train_mask)[0]]
                 test_prot = [all_prot[i] for i in np.where(test_mask)[0]]
-                y_pred = train_chemprop(
+                y_pred = train_chemeleon(
                     train_prot, y_tr, test_prot,
                     cache_dir=chemprop_cache,
-                    cache_key=f"2.10_{ep}_cluster_fold{fold_id}",
-                    checkpoint_dir=model_dir / "models",
+                    cache_key=f"2.10_{ep}_cluster_fold{fold_id}"
                 )
 
             se = (y_te - y_pred) ** 2
@@ -590,6 +591,8 @@ def main(
                 })
 
     errors_df = pd.DataFrame(error_rows)
+    errors_df.to_parquet(pred_path, index=False)
+    logger.info(f"Saved predictions.parquet ({len(errors_df)} rows)")
     errors_df.to_csv(errors_path, index=False)
     logger.info(f"Saved cliff_vs_noncliff_errors.csv ({len(errors_df)} rows)")
 
@@ -650,7 +653,7 @@ def sensitivity(
         PROCESSED_DATA_DIR / "2.10-seal-activity-cliff-eval", help="Output directory"
     ),
     dpi: int = typer.Option(DEFAULT_DPI, help="DPI for saved figures"),
-    model: str = typer.Option("xgboost", help="Prediction source: xgboost or chemprop"),
+    model: str = typer.Option("xgboost", help="Prediction source: xgboost or chemeleon"),
     thresholds: str = typer.Option(
         "0.70,0.75,0.80,0.85,0.90,0.95",
         help="Comma-separated Tanimoto similarity thresholds to sweep",
@@ -673,8 +676,8 @@ def sensitivity(
     """
     set_style()
     output_dir.mkdir(parents=True, exist_ok=True)
-    if model not in ("xgboost", "chemprop"):
-        logger.error(f"Unknown model: {model}. Choose xgboost or chemprop.")
+    if model not in ("xgboost", "chemeleon"):
+        logger.error(f"Unknown model: {model}. Choose xgboost or chemeleon.")
         raise typer.Exit(1)
 
     _migrate_flat_outputs(output_dir)
@@ -691,12 +694,12 @@ def sensitivity(
     dist_mol_names = npz["molecule_names"]
     name_to_dist_idx = {str(n): i for i, n in enumerate(dist_mol_names)}
 
-    errors_path = model_dir / "cliff_vs_noncliff_errors.csv"
-    if not errors_path.exists():
+    pred_path = model_dir / "predictions.parquet"
+    if not pred_path.exists():
         raise FileNotFoundError(
-            f"{errors_path} not found — run `main --model {model}` first to generate predictions"
+            f"{pred_path} not found — run `main --model {model}` first to generate predictions"
         )
-    errors_df = pd.read_csv(errors_path)
+    errors_df = pd.read_parquet(pred_path)
     logger.info(f"Loaded {len(errors_df)} existing {model} test predictions")
 
     rows = []
