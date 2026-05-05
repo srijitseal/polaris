@@ -8,8 +8,8 @@ import seaborn as sns
 
 DEFAULT_DPI = 150
 
-MODEL_COLORS = {"xgboost": "steelblue", "chemprop": "darkorange"}
-MODEL_LABELS = {"xgboost": "XGBoost", "chemprop": "Chemprop (D-MPNN)"}
+MODEL_COLORS = {"xgboost": "steelblue", "chemeleon": "darkorange"}
+MODEL_LABELS = {"xgboost": "XGBoost", "chemeleon": "CheMeleon"}
 
 
 def set_style():
@@ -31,7 +31,7 @@ def plot_model_comparison_bars(
 
     Parameters
     ----------
-    data_by_model : {"xgboost": df, "chemprop": df} where each df has endpoint_col and metric_col
+    data_by_model : {"xgboost": df, "chemeleon": df} where each df has endpoint_col and metric_col
     endpoint_col : column name for x-axis grouping (e.g. "endpoint")
     metric_col : column name for bar height (e.g. "r2")
     ylabel, title : axis labels

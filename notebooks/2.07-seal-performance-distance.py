@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Performance-over-distance curves for all endpoints across all split strategies.
 
-Trains a model (XGBoost or Chemprop D-MPNN) on pre-saved CV folds (cluster, time,
+Trains a model (XGBoost or CheMeleon) on pre-saved CV folds (cluster, time,
 target — repeat 0), then plots how RMSE degrades with distance from training data.
 Molecules are protonated at assay-relevant pH using dimorphite_dl before feature
 computation. For endpoints not already on log scale (everything except LogD),
@@ -10,7 +10,7 @@ OpenADMET competition protocol.
 
 Usage:
     pixi run -e cheminformatics python notebooks/2.07-seal-performance-distance.py
-    pixi run -e cheminformatics python notebooks/2.07-seal-performance-distance.py --model chemprop
+    pixi run -e cheminformatics python notebooks/2.07-seal-performance-distance.py --model chemeleon
     pixi run -e cheminformatics python notebooks/2.07-seal-performance-distance.py --combined
 
 Outputs (under data/processed/2.07-seal-performance-distance/{model}/):
@@ -45,7 +45,7 @@ from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 
-from polaris_generalization.chemprop_utils import train_chemprop
+from polaris_generalization.chemprop_utils import train_chemeleon
 from polaris_generalization.config import INTERIM_DATA_DIR, PROCESSED_DATA_DIR
 from polaris_generalization.tuning import tune_xgboost
 from polaris_generalization.visualization import (
@@ -426,12 +426,12 @@ def _generate_figures(
 
 
 def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
-    """Overlay XGBoost (solid) and Chemprop (dashed) distance curves on same axes."""
+    """Overlay XGBoost (solid) and CheMeleon (dashed) distance curves on same axes."""
     combined_dir = output_dir / "combined"
     combined_dir.mkdir(parents=True, exist_ok=True)
 
     model_preds = {}
-    for model in ["xgboost", "chemprop"]:
+    for model in ["xgboost", "chemeleon"]:
         pred_file = output_dir / model / "predictions.parquet"
         if not pred_file.exists():
             logger.warning(f"Missing {pred_file}; skipping combined figures")
@@ -439,7 +439,7 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
         model_preds[model] = pd.read_parquet(pred_file)
 
     strat_colors = {"cluster": "steelblue", "time": "coral", "target": "forestgreen"}
-    model_linestyles = {"xgboost": "-", "chemprop": "--"}
+    model_linestyles = {"xgboost": "-", "chemeleon": "--"}
     active_endpoints = sorted(model_preds["xgboost"]["endpoint"].unique())
     n_ep = len(active_endpoints)
     ncols = 2
@@ -496,7 +496,7 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
 
     # ── Degradation-ratio comparison bar chart ───────────────────────────
     model_metrics = {}
-    for model in ["xgboost", "chemprop"]:
+    for model in ["xgboost", "chemeleon"]:
         summary_file = output_dir / model / "performance_distance_summary.csv"
         if summary_file.exists():
             model_metrics[model] = pd.read_csv(summary_file)
@@ -507,7 +507,7 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
             endpoint_col="endpoint",
             metric_col="degradation_ratio",
             ylabel="Degradation ratio (farthest / closest bin RMSE)",
-            title="Structural-distance degradation ratio: XGBoost vs Chemprop",
+            title="Structural-distance degradation ratio: XGBoost vs CheMeleon",
             output_path=combined_dir / "degradation_ratio_comparison.png",
             dpi=dpi,
         )
@@ -527,8 +527,8 @@ def main(
         PROCESSED_DATA_DIR / "2.07-seal-performance-distance", help="Output directory"
     ),
     dpi: int = typer.Option(DEFAULT_DPI, help="DPI for saved figures"),
-    model: str = typer.Option("xgboost", help="Model backend: xgboost or chemprop"),
-    combined: bool = typer.Option(False, help="Generate combined XGBoost+Chemprop figures"),
+    model: str = typer.Option("xgboost", help="Model backend: xgboost or chemeleon"),
+    combined: bool = typer.Option(False, help="Generate combined XGBoost+CheMeleon figures"),
 ) -> None:
     set_style()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -543,13 +543,37 @@ def main(
     model_dir.mkdir(parents=True, exist_ok=True)
 
     # Skip if already complete
-    if (model_dir / "predictions.parquet").exists() and (model_dir / "performance_distance_summary.csv").exists():
+    if (model_dir / "predictions.parquet").exists():
         logger.info(f"Found existing outputs for {model}, skipping training")
         pred_df = pd.read_parquet(model_dir / "predictions.parquet")
-        perf_df = pd.read_csv(model_dir / "per_fold_performance.csv")
         all_results = []
-        for _, row in pred_df.iterrows():
-            pass
+        for (ep, strat, fold_id), grp in pred_df.groupby(["endpoint", "strategy", "fold"]):
+            y_test = grp["y_true"].values
+            y_pred_vals = grp["y_pred"].values
+            sq_errors = (y_pred_vals - y_test) ** 2
+            mae = mean_absolute_error(y_test, y_pred_vals)
+            r2 = r2_score(y_test, y_pred_vals)
+            sp_r, _ = spearmanr(y_test, y_pred_vals)
+            kt, _ = kendalltau(y_test, y_pred_vals)
+            baseline_mad = np.mean(np.abs(y_test - np.mean(y_test)))
+            rae = mae / baseline_mad if baseline_mad > 0 else np.nan
+            all_results.append({
+                "endpoint": ep, "strategy": strat, "fold": fold_id,
+                "n_train": 0, "n_test": len(grp),
+                "struct_dist": grp["struct_1nn"].values,
+                "target_dist": grp["target_1nn"].values,
+                "sq_errors": sq_errors,
+                "mae": mae, "r2": r2, "spearman_r": sp_r,
+                "kendall_tau": kt, "rae": rae,
+                "overall_rmse": float(np.sqrt(sq_errors.mean())),
+            })
+        perf_df = pd.DataFrame([
+            {"endpoint": r["endpoint"], "strategy": r["strategy"], "fold": r["fold"],
+             "n_train": r["n_train"], "n_test": r["n_test"], "mae": r["mae"],
+             "r2": r["r2"], "spearman_r": r["spearman_r"], "kendall_tau": r["kendall_tau"],
+             "rae": r["rae"], "rmse": r["overall_rmse"]}
+            for r in all_results
+        ])
         _generate_figures(all_results, perf_df, pred_df, model_dir, model, dpi)
         return
 
@@ -598,7 +622,7 @@ def main(
     )
     pbar = tqdm(total=total_iters, desc=f"Training {model}", unit="fold")
 
-    chemprop_cache_dir = INTERIM_DATA_DIR / "chemprop_pred_cache"
+    pred_cache_dir = model_dir / "pred_cache"
 
     for ep in ENDPOINTS:
         mask = df[ep].notna().values
@@ -651,11 +675,10 @@ def main(
                 else:
                     train_smiles = [ep_prot_smiles[i] for i in train_idx]
                     test_smiles = [ep_prot_smiles[i] for i in test_idx]
-                    y_pred = train_chemprop(
+                    y_pred = train_chemeleon(
                         train_smiles, y_train, test_smiles,
-                        cache_dir=chemprop_cache_dir,
-                        cache_key=f"2.07_{ep}_{strat_name}_fold{fold_id}",
-                        checkpoint_dir=model_dir / "models",
+                        cache_dir=pred_cache_dir,
+                        cache_key=f"2.07_{ep}_{strat_name}_fold{fold_id}"
                     )
 
                 sq_errors = (y_pred - y_test) ** 2

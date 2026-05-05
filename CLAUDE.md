@@ -20,7 +20,7 @@ pixi run python
 
 # Run an analysis notebook (cheminformatics env required for RDKit, Chemprop, PyArrow)
 pixi run -e cheminformatics python notebooks/2.08-seal-baseline-performance.py
-pixi run -e cheminformatics python notebooks/2.08-seal-baseline-performance.py --model chemprop
+pixi run -e cheminformatics python notebooks/2.08-seal-baseline-performance.py --model chemeleon
 pixi run -e cheminformatics python notebooks/2.08-seal-baseline-performance.py --combined
 ```
 
@@ -52,27 +52,27 @@ This is a generalization evaluation framework for molecular ML, analyzing how mo
    - `config.py`: Centralized path definitions using pathlib
    - `visualization.py`: Plotting utilities — `set_style()`, `DEFAULT_DPI`, `MODEL_COLORS`, `MODEL_LABELS`, `plot_model_comparison_bars()`
    - `tuning.py`: Optuna TPE XGBoost hyperparameter tuning with JSON caching (`tune_xgboost`)
-   - `chemprop_utils.py`: Chemprop D-MPNN training with prediction caching (`train_chemprop`)
+   - `chemprop_utils.py`: CheMeleon fine-tuning and Chemprop D-MPNN training with prediction caching (`train_chemeleon`, `train_chemprop`)
 
 2. **Notebooks** (`notebooks/`): Analysis notebooks following phase-based naming
    - Convention: `<phase>.<sequence>-<initials>-<description>.py`
    - Phases: 0 = exploration, 1 = data loading, 2 = analysis, 3 = figures
-   - All modeling notebooks support `--model xgboost|chemprop` and `--combined` flags
+   - All modeling notebooks support `--model xgboost|chemeleon` and `--combined` flags (2.12 still uses `chemprop`)
 
 3. **Data Organization** (cookiecutter data science):
    - `data/external/`: External datasets
    - `data/raw/`: Original immutable data
-   - `data/interim/`: Intermediate data — CV folds, Tanimoto matrix, `optuna_cache/`, `chemprop_pred_cache/`
+   - `data/interim/`: Intermediate data — CV folds, Tanimoto matrix, `optuna_cache/`
    - `data/processed/`: Analysis outputs, organized as `{notebook}/{model}/` with a `combined/` subdirectory
 
 4. **Configuration** (`configs/`): Model and experiment configuration files
 
-### Modeling: XGBoost vs Chemprop
+### Modeling: XGBoost vs CheMeleon
 
 Every modeling notebook (2.07–2.15) supports two model backends:
 
 - **XGBoost** (`--model xgboost`, default): ECFP4 (2048-bit) + ~200 RDKit 2D descriptors, Optuna TPE-tuned per endpoint. Hyperparameters cached as JSON in `data/interim/optuna_cache/`.
-- **Chemprop** (`--model chemprop`): D-MPNN trained directly on protonated SMILES, default hyperparameters (hidden_dim=300, depth=3, 50 epochs). Predictions cached as `.npy` in `data/interim/chemprop_pred_cache/`.
+- **CheMeleon** (`--model chemeleon`): Pre-trained BondMessagePassing foundation model fine-tuned per endpoint. Weights stored at `data/interim/chemeleon_mp.pt`; auto-downloaded from Zenodo (record 15460715, `https://zenodo.org/records/15460715/files/chemeleon_mp.pt`) on first call by `train_chemeleon`. FFN: 2 layers × 1024 hidden. Predictions cached as `.npy` in `data/processed/{notebook}/chemeleon/pred_cache/`.
 
 Both models use dimorphite_dl protonation at assay-relevant pH before training. Log-transform protocol (`log10(clip(x, 1e-10) + 1)`) applies to all endpoints except LogD for both models.
 

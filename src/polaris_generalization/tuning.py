@@ -1,6 +1,7 @@
 """Shared Optuna-based hyperparameter tuning for XGBoost."""
 
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -8,12 +9,20 @@ import optuna
 from sklearn.model_selection import cross_val_score
 from xgboost import XGBRegressor
 
+# Use half the available CPUs so other processes (e.g. CheMeleon) can share the machine.
+# Split budget between CV-level parallelism and intra-tree parallelism to avoid
+# oversubscription: cv folds run in parallel, each XGBoost gets the remaining threads.
+_N_CV = 3
+_TOTAL_JOBS = max(1, (os.cpu_count() or 1) // 2)
+_XGB_JOBS = max(1, _TOTAL_JOBS // _N_CV)   # threads per XGBoost fit
+_CV_JOBS = _N_CV                            # parallel CV folds
+
 
 def tune_xgboost(
     X_train: np.ndarray,
     y_train: np.ndarray,
     n_trials: int = 30,
-    cv: int = 3,
+    cv: int = _N_CV,
     random_state: int = 42,
     cache_dir: Path | None = None,
     cache_key: str | None = None,
@@ -40,7 +49,8 @@ def tune_xgboost(
         cache_file = Path(cache_dir) / f"{safe_key}.json"
         if cache_file.exists():
             params = json.loads(cache_file.read_text())
-            model = XGBRegressor(**params, tree_method="hist", random_state=random_state, verbosity=0)
+            model = XGBRegressor(**params, tree_method="hist", n_jobs=_XGB_JOBS,
+                                 random_state=random_state, verbosity=0)
             model.fit(X_train, y_train)
             return model, params, None
 
@@ -57,8 +67,10 @@ def tune_xgboost(
             "reg_alpha": trial.suggest_float("reg_alpha", 0.0, 1.0),
             "reg_lambda": trial.suggest_float("reg_lambda", 0.5, 3.0),
         }
-        model = XGBRegressor(**params, tree_method="hist", random_state=random_state, verbosity=0)
-        scores = cross_val_score(model, X_train, y_train, cv=cv, scoring="neg_mean_absolute_error")
+        model = XGBRegressor(**params, tree_method="hist", n_jobs=_XGB_JOBS,
+                             random_state=random_state, verbosity=0)
+        scores = cross_val_score(model, X_train, y_train, cv=cv,
+                                 scoring="neg_mean_absolute_error", n_jobs=_CV_JOBS)
         return -scores.mean()
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -66,7 +78,8 @@ def tune_xgboost(
     study.optimize(objective, n_trials=n_trials)
 
     # Train final model with best params
-    best_model = XGBRegressor(**study.best_params, tree_method="hist", random_state=random_state, verbosity=0)
+    best_model = XGBRegressor(**study.best_params, tree_method="hist", n_jobs=_XGB_JOBS,
+                              random_state=random_state, verbosity=0)
     best_model.fit(X_train, y_train)
 
     # Save to cache

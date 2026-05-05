@@ -3,16 +3,17 @@
 
 Takes two large Butina clusters (chemical series), time-splits the largest
 into train + IID validation, uses the smaller cluster as OOD test set, trains
-XGBoost or Chemprop D-MPNN models, and compares squared error intra-series
+XGBoost or CheMeleon models, and compares squared error intra-series
 (IID) vs inter-series (OOD). Demonstrates that chemical series + time-split
 uniquely enable this analysis.
 
 Usage:
     pixi run -e cheminformatics python notebooks/2.09-seal-iid-vs-ood-series.py
-    pixi run -e cheminformatics python notebooks/2.09-seal-iid-vs-ood-series.py --model chemprop
+    pixi run -e cheminformatics python notebooks/2.09-seal-iid-vs-ood-series.py --model chemeleon
     pixi run -e cheminformatics python notebooks/2.09-seal-iid-vs-ood-series.py --combined
 
 Outputs (per model):
+    data/processed/2.09-seal-iid-vs-ood-series/{model}/predictions.parquet
     data/processed/2.09-seal-iid-vs-ood-series/{model}/iid_vs_ood_errors.csv
     data/processed/2.09-seal-iid-vs-ood-series/{model}/summary_metrics.csv
     data/processed/2.09-seal-iid-vs-ood-series/{model}/squared_error_distributions.png
@@ -45,7 +46,7 @@ from scipy.stats import kendalltau, spearmanr
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.preprocessing import StandardScaler
 
-from polaris_generalization.chemprop_utils import train_chemprop
+from polaris_generalization.chemprop_utils import train_chemeleon
 from polaris_generalization.config import INTERIM_DATA_DIR, PROCESSED_DATA_DIR
 from polaris_generalization.tuning import tune_xgboost
 from polaris_generalization.visualization import (
@@ -309,9 +310,9 @@ def _generate_figures(errors_df: pd.DataFrame, metrics_df: pd.DataFrame,
 def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
     """Load both models' metrics and produce side-by-side comparison figures."""
     xgb_path = output_dir / "xgboost" / "summary_metrics.csv"
-    chemprop_path = output_dir / "chemprop" / "summary_metrics.csv"
+    chemeleon_path = output_dir / "chemeleon" / "summary_metrics.csv"
 
-    missing = [m for m, p in [("xgboost", xgb_path), ("chemprop", chemprop_path)] if not p.exists()]
+    missing = [m for m, p in [("xgboost", xgb_path), ("chemeleon", chemeleon_path)] if not p.exists()]
     if missing:
         logger.error(f"Missing results for: {missing}. Run those models first.")
         return
@@ -320,12 +321,12 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
     combined_dir.mkdir(parents=True, exist_ok=True)
 
     xgb = pd.read_csv(xgb_path)
-    chemprop = pd.read_csv(chemprop_path)
+    chemeleon = pd.read_csv(chemeleon_path)
 
     for set_label in ("iid", "ood"):
         xgb_set = xgb[xgb["set"] == set_label].copy()
-        chemprop_set = chemprop[chemprop["set"] == set_label].copy()
-        data_by_model = {"xgboost": xgb_set, "chemprop": chemprop_set}
+        chemeleon_set = chemeleon[chemeleon["set"] == set_label].copy()
+        data_by_model = {"xgboost": xgb_set, "chemeleon": chemeleon_set}
 
         for metric, ylabel, fname in [
             ("mae", "MAE", "mae"),
@@ -335,7 +336,7 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
         ]:
             plot_model_comparison_bars(
                 data_by_model, "endpoint", metric, ylabel,
-                f"{ylabel} — XGBoost vs Chemprop ({set_label.upper()})",
+                f"{ylabel} — XGBoost vs CheMeleon ({set_label.upper()})",
                 combined_dir / f"{fname}_{set_label}_comparison.png", dpi=dpi,
             )
             logger.info(f"Saved {fname}_{set_label}_comparison.png")
@@ -350,8 +351,8 @@ def main(
     ),
     dpi: int = typer.Option(DEFAULT_DPI, help="DPI for saved figures"),
     train_frac: float = typer.Option(0.8, help="Fraction of largest cluster for training (rest = IID val)"),
-    model: str = typer.Option("xgboost", help="Model architecture: xgboost or chemprop"),
-    combined: bool = typer.Option(False, help="Generate combined XGBoost+Chemprop comparison figures"),
+    model: str = typer.Option("xgboost", help="Model architecture: xgboost or chemeleon"),
+    combined: bool = typer.Option(False, help="Generate combined XGBoost+CheMeleon comparison figures"),
 ) -> None:
     set_style()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -360,8 +361,8 @@ def main(
         _generate_combined_figures(output_dir, dpi)
         return
 
-    if model not in ("xgboost", "chemprop"):
-        logger.error(f"Unknown model: {model}. Choose xgboost or chemprop.")
+    if model not in ("xgboost", "chemeleon"):
+        logger.error(f"Unknown model: {model}. Choose xgboost or chemeleon.")
         raise typer.Exit(1)
 
     _migrate_flat_outputs(output_dir)
@@ -370,11 +371,12 @@ def main(
     model_dir.mkdir(parents=True, exist_ok=True)
 
     # Skip training if outputs already exist
+    pred_path = model_dir / "predictions.parquet"
     errors_path = model_dir / "iid_vs_ood_errors.csv"
     metrics_path = model_dir / "summary_metrics.csv"
-    if errors_path.exists() and metrics_path.exists():
-        logger.info(f"Existing {model} outputs found — regenerating figures only")
-        errors_df = pd.read_csv(errors_path)
+    if pred_path.exists():
+        logger.info(f"Existing {model} predictions found — regenerating figures only")
+        errors_df = pd.read_parquet(pred_path)
         metrics_df = pd.read_csv(metrics_path)
         _generate_figures(errors_df, metrics_df, model_dir, dpi)
         logger.info("Figures regenerated (no models retrained)")
@@ -506,7 +508,7 @@ def main(
     metric_rows = []
 
     optuna_cache = INTERIM_DATA_DIR / "optuna_cache"
-    chemprop_cache = INTERIM_DATA_DIR / "chemprop_pred_cache"
+    chemprop_cache = model_dir / "pred_cache"
 
     for ep in ENDPOINTS:
         ph = ENDPOINT_PH[ep]
@@ -560,18 +562,15 @@ def main(
             iid_prot = [all_iid_prot[i] for i in np.where(iid_mask)[0]]
             ood_prot = [all_ood_prot[i] for i in np.where(ood_mask)[0]]
 
-            y_pred_iid = train_chemprop(
-                train_prot, y_tr, iid_prot,
+            # Train once, predict on concatenated IID+OOD test set, then split.
+            combined_prot = iid_prot + ood_prot
+            combined_preds = train_chemeleon(
+                train_prot, y_tr, combined_prot,
                 cache_dir=chemprop_cache,
-                cache_key=f"2.09_{ep}_iid_ood_iid",
-                checkpoint_dir=model_dir / "models",
+                cache_key=f"2.09_{ep}_iid_ood"
             )
-            y_pred_ood = train_chemprop(
-                train_prot, y_tr, ood_prot,
-                cache_dir=chemprop_cache,
-                cache_key=f"2.09_{ep}_iid_ood_ood",
-                checkpoint_dir=model_dir / "models",
-            )
+            y_pred_iid = combined_preds[:len(iid_prot)]
+            y_pred_ood = combined_preds[len(iid_prot):]
 
         se_iid = (y_iid - y_pred_iid) ** 2
         se_ood = (y_ood - y_pred_ood) ** 2
@@ -579,10 +578,12 @@ def main(
         iid_names = iid_df["Molecule Name"].values[iid_mask]
         ood_names = ood_df["Molecule Name"].values[ood_mask]
 
-        for name, se in zip(iid_names, se_iid):
-            error_rows.append({"Molecule Name": name, "endpoint": ep, "set": "iid", "squared_error": se})
-        for name, se in zip(ood_names, se_ood):
-            error_rows.append({"Molecule Name": name, "endpoint": ep, "set": "ood", "squared_error": se})
+        for name, y_true_val, y_pred_val, se in zip(iid_names, y_iid, y_pred_iid, se_iid):
+            error_rows.append({"Molecule Name": name, "endpoint": ep, "set": "iid",
+                               "y_true": y_true_val, "y_pred": y_pred_val, "squared_error": se})
+        for name, y_true_val, y_pred_val, se in zip(ood_names, y_ood, y_pred_ood, se_ood):
+            error_rows.append({"Molecule Name": name, "endpoint": ep, "set": "ood",
+                               "y_true": y_true_val, "y_pred": y_pred_val, "squared_error": se})
 
         for label, y_true, y_pred, se in [
             ("iid", y_iid, y_pred_iid, se_iid),
@@ -617,6 +618,8 @@ def main(
     errors_df = pd.DataFrame(error_rows)
     metrics_df = pd.DataFrame(metric_rows)
 
+    errors_df.to_parquet(pred_path, index=False)
+    logger.info(f"Saved predictions.parquet ({len(errors_df)} rows)")
     errors_df.to_csv(errors_path, index=False)
     metrics_df.to_csv(metrics_path, index=False)
     logger.info("Saved iid_vs_ood_errors.csv and summary_metrics.csv")

@@ -1,20 +1,20 @@
 #!/usr/bin/env python
 """Baseline model performance on the original train/test split.
 
-Trains XGBoost or Chemprop D-MPNN on the competition split (5,326 / 2,282).
+Trains XGBoost or CheMeleon on the competition split (5,326 / 2,282).
 Molecules are protonated at the relevant assay pH using dimorphite_dl:
   - pH 7.4: LogD, KSOL, HLM/MLM CLint, MPPB, MBPB, MGMB
   - pH 6.5: Caco-2 Papp A>B, Caco-2 Efflux (apical compartment)
 
 XGBoost uses ECFP4 + full RDKit 2D descriptors (~200), Optuna TPE-tuned per endpoint.
-Chemprop D-MPNN uses default hyperparameters (hidden_dim=300, depth=3, 50 epochs).
+CheMeleon fine-tunes the pre-trained foundation model (FFN: 2 layers × 1024 hidden).
 
 For endpoints not on log scale (everything except LogD), targets are log-transformed
 via log10(clip(x, 1e-10) + 1), matching the OpenADMET competition protocol.
 
 Usage:
     pixi run -e cheminformatics python notebooks/2.08-seal-baseline-performance.py
-    pixi run -e cheminformatics python notebooks/2.08-seal-baseline-performance.py --model chemprop
+    pixi run -e cheminformatics python notebooks/2.08-seal-baseline-performance.py --model chemeleon
     pixi run -e cheminformatics python notebooks/2.08-seal-baseline-performance.py --combined
 
 Outputs (per model):
@@ -46,7 +46,7 @@ from scipy.stats import kendalltau, spearmanr
 from sklearn.metrics import mean_absolute_error, r2_score
 from sklearn.preprocessing import StandardScaler
 
-from polaris_generalization.chemprop_utils import train_chemprop
+from polaris_generalization.chemprop_utils import train_chemeleon
 from polaris_generalization.config import INTERIM_DATA_DIR, PROCESSED_DATA_DIR
 from polaris_generalization.tuning import tune_xgboost
 from polaris_generalization.visualization import (
@@ -271,9 +271,9 @@ def _generate_figures(
 def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
     """Load both models' metrics and produce side-by-side comparison figures."""
     xgb_path = output_dir / "xgboost" / "overall_metrics.csv"
-    chemprop_path = output_dir / "chemprop" / "overall_metrics.csv"
+    chemeleon_path = output_dir / "chemeleon" / "overall_metrics.csv"
 
-    missing = [m for m, p in [("xgboost", xgb_path), ("chemprop", chemprop_path)] if not p.exists()]
+    missing = [m for m, p in [("xgboost", xgb_path), ("chemeleon", chemeleon_path)] if not p.exists()]
     if missing:
         logger.error(f"Missing results for: {missing}. Run those models first.")
         return
@@ -282,7 +282,7 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
     combined_dir.mkdir(parents=True, exist_ok=True)
 
     xgb = pd.read_csv(xgb_path)
-    chemprop = pd.read_csv(chemprop_path)
+    chemeleon = pd.read_csv(chemeleon_path)
 
     # Comparison CSV
     merge_cols = ["endpoint", "mae", "r2", "spearman_r", "rae", "kendall_tau"]
@@ -290,7 +290,7 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
         xgb[merge_cols]
         .rename(columns={c: f"{c}_xgboost" for c in merge_cols if c != "endpoint"})
         .merge(
-            chemprop[merge_cols].rename(columns={c: f"{c}_chemprop" for c in merge_cols if c != "endpoint"}),
+            chemeleon[merge_cols].rename(columns={c: f"{c}_chemeleon" for c in merge_cols if c != "endpoint"}),
             on="endpoint",
         )
     )
@@ -298,7 +298,7 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
     logger.info("Saved metrics_comparison.csv")
 
     # Grouped bar charts
-    data_by_model = {"xgboost": xgb, "chemprop": chemprop}
+    data_by_model = {"xgboost": xgb, "chemeleon": chemeleon}
     for metric, ylabel, fname in [
         ("r2", "R²", "r2_comparison"),
         ("mae", "MAE", "mae_comparison"),
@@ -310,7 +310,7 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
             "endpoint",
             metric,
             ylabel,
-            f"{ylabel} — XGBoost vs Chemprop (original split)",
+            f"{ylabel} — XGBoost vs CheMeleon (original split)",
             combined_dir / f"{fname}.png",
             dpi=dpi,
         )
@@ -326,8 +326,8 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
 def main(
     output_dir: Path = typer.Option(PROCESSED_DATA_DIR / "2.08-seal-baseline-performance", help="Output directory"),
     dpi: int = typer.Option(DEFAULT_DPI, help="DPI for saved figures"),
-    model: str = typer.Option("xgboost", help="Model architecture: xgboost or chemprop"),
-    combined: bool = typer.Option(False, help="Generate combined XGBoost+Chemprop comparison figures"),
+    model: str = typer.Option("xgboost", help="Model architecture: xgboost or chemeleon"),
+    combined: bool = typer.Option(False, help="Generate combined XGBoost+CheMeleon comparison figures"),
 ) -> None:
     set_style()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -336,8 +336,8 @@ def main(
         _generate_combined_figures(output_dir, dpi)
         return
 
-    if model not in ("xgboost", "chemprop"):
-        logger.error(f"Unknown model: {model}. Choose xgboost or chemprop.")
+    if model not in ("xgboost", "chemeleon"):
+        logger.error(f"Unknown model: {model}. Choose xgboost or chemeleon.")
         raise typer.Exit(1)
 
     _migrate_flat_outputs(output_dir)
@@ -348,7 +348,7 @@ def main(
     # ── Skip training if predictions already exist ────────────────────
     pred_path = model_dir / "predictions.parquet"
     metrics_path = model_dir / "overall_metrics.csv"
-    if pred_path.exists() and metrics_path.exists():
+    if pred_path.exists():
         logger.info(f"Existing {model} predictions found — regenerating figures only")
         pred_df = pd.read_parquet(pred_path)
         metrics_df = pd.read_csv(metrics_path)
@@ -399,7 +399,7 @@ def main(
 
     # ── 4. Train and evaluate per endpoint ───────────────────────────
     optuna_cache = INTERIM_DATA_DIR / "optuna_cache"
-    chemprop_cache = INTERIM_DATA_DIR / "chemprop_pred_cache"
+    chemprop_cache = model_dir / "pred_cache"
 
     metric_rows = []
     prediction_rows = []
@@ -434,14 +434,13 @@ def main(
         else:
             train_prot = [s for s, m in zip(prot_by_ph[ph]["train"], train_mask) if m]
             test_prot = [s for s, m in zip(prot_by_ph[ph]["test"], test_mask) if m]
-            logger.info(f"  {ep} ({n_train} train, {n_test} test) — training Chemprop D-MPNN")
-            y_pred = train_chemprop(
+            logger.info(f"  {ep} ({n_train} train, {n_test} test) — fine-tuning CheMeleon")
+            y_pred = train_chemeleon(
                 train_prot,
                 y_tr,
                 test_prot,
                 cache_dir=chemprop_cache,
-                cache_key=f"2.08_{ep}_baseline",
-                checkpoint_dir=model_dir / "models",
+                cache_key=f"2.08_{ep}_baseline"
             )
 
         mae = mean_absolute_error(y_te, y_pred)

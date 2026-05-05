@@ -2,19 +2,19 @@
 """Molecular variant consistency analysis: Resonance Structures.
 
 Analyzes prediction sensitivity to resonance form representation by loading
-pre-generated resonance forms from 2.14, training models (XGBoost or Chemprop),
+pre-generated resonance forms from 2.14, training models (XGBoost or CheMeleon),
 and comparing predictions across canonical and resonance-form SMILES.
 
 ECFP4 fingerprint instability analysis (Tanimoto distances between resonance
 forms) is model-agnostic and always computed. Feature computation for XGBoost
 training (ECFP4 + RDKit 2D) is XGBoost-only.
 
-Supports XGBoost (ECFP4 + RDKit 2D descriptors, Optuna-tuned) and Chemprop
-D-MPNN. Use --combined to generate side-by-side comparison figures.
+Supports XGBoost (ECFP4 + RDKit 2D descriptors, Optuna-tuned) and CheMeleon.
+Use --combined to generate side-by-side comparison figures.
 
 Usage:
     pixi run -e cheminformatics python notebooks/2.15-zalte-resonance-variants.py
-    pixi run -e cheminformatics python notebooks/2.15-zalte-resonance-variants.py --model chemprop
+    pixi run -e cheminformatics python notebooks/2.15-zalte-resonance-variants.py --model chemeleon
     pixi run -e cheminformatics python notebooks/2.15-zalte-resonance-variants.py --combined
 
 Model-agnostic outputs (saved to output_dir):
@@ -48,7 +48,7 @@ from rdkit.ML.Descriptors.MoleculeDescriptors import MolecularDescriptorCalculat
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 
-from polaris_generalization.chemprop_utils import train_chemprop
+from polaris_generalization.chemprop_utils import train_chemeleon
 from polaris_generalization.config import INTERIM_DATA_DIR, PROCESSED_DATA_DIR
 from polaris_generalization.tuning import tune_xgboost
 from polaris_generalization.visualization import (
@@ -293,9 +293,9 @@ def _generate_figures(
 def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
     """Load both models' consistency summaries and produce comparison figures."""
     xgb_path = output_dir / "xgboost" / "consistency_summary.csv"
-    chemprop_path = output_dir / "chemprop" / "consistency_summary.csv"
+    chemeleon_path = output_dir / "chemeleon" / "consistency_summary.csv"
 
-    missing = [m for m, p in [("xgboost", xgb_path), ("chemprop", chemprop_path)] if not p.exists()]
+    missing = [m for m, p in [("xgboost", xgb_path), ("chemeleon", chemeleon_path)] if not p.exists()]
     if missing:
         logger.error(f"Missing results for: {missing}. Run those models first.")
         return
@@ -304,7 +304,7 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
     combined_dir.mkdir(parents=True, exist_ok=True)
 
     xgb = pd.read_csv(xgb_path)
-    chemprop = pd.read_csv(chemprop_path)
+    chemeleon = pd.read_csv(chemeleon_path)
 
     # Comparison CSV
     merge_cols = ["endpoint", "baseline_rmse", "rms_minrd", "rms_maxrd",
@@ -312,7 +312,7 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
     comparison_df = (
         xgb[merge_cols].rename(columns={c: f"{c}_xgboost" for c in merge_cols if c != "endpoint"})
         .merge(
-            chemprop[merge_cols].rename(columns={c: f"{c}_chemprop" for c in merge_cols if c != "endpoint"}),
+            chemeleon[merge_cols].rename(columns={c: f"{c}_chemeleon" for c in merge_cols if c != "endpoint"}),
             on="endpoint",
         )
     )
@@ -320,7 +320,7 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
     logger.info("Saved consistency_comparison.csv")
 
     # Grouped bar charts
-    data_by_model = {"xgboost": xgb, "chemprop": chemprop}
+    data_by_model = {"xgboost": xgb, "chemeleon": chemeleon}
     for metric, ylabel, fname in [
         ("pct_swing", "% RMSE swing (Max−Min)", "pct_swing_comparison"),
         ("rms_resrange", "RMS resonance prediction range", "rms_resrange_comparison"),
@@ -328,7 +328,7 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
     ]:
         plot_model_comparison_bars(
             data_by_model, "endpoint", metric, ylabel,
-            f"{ylabel} — XGBoost vs Chemprop",
+            f"{ylabel} — XGBoost vs CheMeleon",
             combined_dir / f"{fname}.png", dpi=dpi,
         )
         logger.info(f"Saved {fname}.png")
@@ -345,8 +345,8 @@ def main(
         PROCESSED_DATA_DIR / "2.15-zalte-resonance-variants"
     ),
     dpi: int = typer.Option(DEFAULT_DPI),
-    model: str = typer.Option("xgboost", help="Model architecture: xgboost or chemprop"),
-    combined: bool = typer.Option(False, help="Generate combined XGBoost+Chemprop comparison figures"),
+    model: str = typer.Option("xgboost", help="Model architecture: xgboost or chemeleon"),
+    combined: bool = typer.Option(False, help="Generate combined XGBoost+CheMeleon comparison figures"),
 ):
     set_style()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -355,8 +355,8 @@ def main(
         _generate_combined_figures(output_dir, dpi)
         return
 
-    if model not in ("xgboost", "chemprop"):
-        logger.error(f"Unknown model: {model}. Choose xgboost or chemprop.")
+    if model not in ("xgboost", "chemeleon"):
+        logger.error(f"Unknown model: {model}. Choose xgboost or chemeleon.")
         raise typer.Exit(1)
 
     _migrate_flat_outputs(output_dir)
@@ -442,7 +442,7 @@ def main(
     # -----------------------------
     # Skip-training check
     # -----------------------------
-    if (model_dir / "consistency_metrics.csv").exists():
+    if (model_dir / "predictions.parquet").exists():
         logger.info(f"Existing {model} outputs found — regenerating figures only")
         consistency_df = pd.read_csv(model_dir / "consistency_metrics.csv")
         summary_df = pd.read_csv(model_dir / "consistency_summary.csv")
@@ -458,7 +458,7 @@ def main(
     oof_predictions = {}
 
     optuna_cache = INTERIM_DATA_DIR / "optuna_cache"
-    chemprop_cache = INTERIM_DATA_DIR / "chemprop_pred_cache"
+    chemprop_cache = model_dir / "pred_cache"
 
     for ep in tqdm(ENDPOINTS, desc="Evaluating Endpoints"):
         ph = ENDPOINT_PH[ep]
@@ -521,7 +521,7 @@ def main(
                         "true": float(true),
                     }
             else:
-                # Chemprop: train once per fold, predict on all resonance forms in one shot.
+                # CheMeleon: train once per fold, predict on all resonance forms in one shot.
                 # Mirrors XGBoost: one model per fold, inference on the full augmented test set.
                 train_prot_fold = [train_smiles_prot[i] for i in np.where(tr)[0]]
 
@@ -537,12 +537,11 @@ def main(
                     all_res_smiles.extend(forms_prot)
                     mol_trues[name] = float(true)
 
-                # One train_chemprop call — model trained once, predicts on all resonance forms.
-                all_preds = train_chemprop(
+                # One train_chemeleon call — model trained once, predicts on all resonance forms.
+                all_preds = train_chemeleon(
                     train_prot_fold, y[tr], all_res_smiles,
                     cache_dir=chemprop_cache,
-                    cache_key=f"2.15_{ep}_cluster_fold{fold_id}_allres",
-                    checkpoint_dir=model_dir / "models",
+                    cache_key=f"2.15_{ep}_cluster_fold{fold_id}_allres"
                 )
 
                 for name, (s, e) in res_slices.items():
@@ -552,6 +551,21 @@ def main(
                         "preds": all_preds[s:e].tolist(),
                         "true": mol_trues[name],
                     }
+
+    # Flatten oof_predictions → predictions.parquet
+    pred_rows = []
+    for name, ep_dict in oof_predictions.items():
+        for ep, v in ep_dict.items():
+            for form_idx, y_pred_val in enumerate(v["preds"]):
+                pred_rows.append({
+                    "Molecule Name": name,
+                    "endpoint": ep,
+                    "form_idx": form_idx,
+                    "y_true": v["true"],
+                    "y_pred": y_pred_val,
+                })
+    pd.DataFrame(pred_rows).to_parquet(model_dir / "predictions.parquet", index=False)
+    logger.info(f"Saved predictions.parquet ({len(pred_rows)} rows)")
 
     # -----------------------------
     # RIGR-aligned metrics
