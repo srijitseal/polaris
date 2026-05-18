@@ -68,6 +68,8 @@ from polaris_generalization.config import INTERIM_DATA_DIR, PROCESSED_DATA_DIR
 from polaris_generalization.tuning import tune_xgboost
 from polaris_generalization.visualization import (
     DEFAULT_DPI,
+    MODEL_COLORS,
+    MODEL_LABELS,
     plot_model_comparison_bars,
     set_style,
 )
@@ -342,6 +344,107 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
                 combined_dir / f"{fname}_{fname_label}_comparison.png", dpi=dpi,
             )
             logger.info(f"Saved {fname}_{fname_label}_comparison.png")
+
+    # ── Combined sensitivity figure (S4): (a) prevalence, (b) RAE gap × 2, (c) hexbin ──
+    xgb_sens_path = output_dir / "xgboost" / "cliff_sensitivity.csv"
+    chem_sens_path = output_dir / "chemeleon" / "cliff_sensitivity.csv"
+    pairs_path = output_dir / "xgboost" / "cliff_sensitivity_pairs.parquet"
+
+    if all(p.exists() for p in [xgb_sens_path, chem_sens_path, pairs_path]):
+        xgb_sens = pd.read_csv(xgb_sens_path)
+        chem_sens = pd.read_csv(chem_sens_path)
+        pairs_df = pd.read_parquet(pairs_path)
+
+        reference_threshold = 0.85
+        min_diff = 1.0
+        active_eps = sorted(pairs_df["endpoint"].unique())
+        n_ep = len(active_eps)
+        ncols_hex = 3
+        nrows_hex = (n_ep + ncols_hex - 1) // ncols_hex
+
+        fig = plt.figure(figsize=(14, 10 + 4 * nrows_hex))
+        gs = GridSpec(
+            3, 1, figure=fig,
+            height_ratios=[1.0, 1.0, 2.2 * nrows_hex / 3],
+            hspace=0.35,
+        )
+
+        # Panel (a): prevalence (model-independent — full width)
+        ax_a = fig.add_subplot(gs[0])
+        for ep in ENDPOINTS:
+            sub = xgb_sens[xgb_sens["endpoint"] == ep].sort_values("sim_threshold")
+            if sub.empty:
+                continue
+            ax_a.plot(sub["sim_threshold"], sub["pct_cliff"], marker="o", label=ep)
+        ax_a.axvline(reference_threshold, color="gray", linestyle="--", alpha=0.6)
+        ax_a.set_xlabel("Tanimoto similarity threshold")
+        ax_a.set_ylabel("% cliff molecules")
+        ax_a.legend(fontsize=8, ncol=3, loc="upper right")
+        ax_a.text(-0.06, 1.02, "a", transform=ax_a.transAxes,
+                  fontsize=16, fontweight="bold", va="bottom", ha="left")
+
+        # Panel (b): RAE gap — XGBoost + CheMeleon overlaid (full width)
+        ax_b = fig.add_subplot(gs[1])
+        for ep in ENDPOINTS:
+            sub_x = xgb_sens[xgb_sens["endpoint"] == ep].sort_values("sim_threshold").dropna(subset=["rae_gap"])
+            sub_c = chem_sens[chem_sens["endpoint"] == ep].sort_values("sim_threshold").dropna(subset=["rae_gap"])
+            color = None
+            if not sub_x.empty:
+                line, = ax_b.plot(sub_x["sim_threshold"], sub_x["rae_gap"], marker="o",
+                                  linestyle="-", alpha=0.8, label=f"{ep}")
+                color = line.get_color()
+            if not sub_c.empty:
+                ax_b.plot(sub_c["sim_threshold"], sub_c["rae_gap"], marker="s",
+                          linestyle="--", alpha=0.6, color=color)
+        ax_b.axhline(0, color="gray", linestyle="-", alpha=0.3)
+        ax_b.axvline(reference_threshold, color="gray", linestyle="--", alpha=0.6)
+        ax_b.set_xlabel("Tanimoto similarity threshold")
+        ax_b.set_ylabel("RAE gap (cliff − non-cliff)")
+        from matplotlib.lines import Line2D
+        legend_elements = ax_b.get_legend_handles_labels()[0]
+        legend_elements += [
+            Line2D([0], [0], color="gray", marker="o", linestyle="-", label="XGBoost"),
+            Line2D([0], [0], color="gray", marker="s", linestyle="--", label="CheMeleon"),
+        ]
+        ax_b.legend(handles=legend_elements, fontsize=7, ncol=4, loc="upper left")
+        ax_b.text(-0.06, 1.02, "b", transform=ax_b.transAxes,
+                  fontsize=16, fontweight="bold", va="bottom", ha="left")
+
+        # Panel (c): hexbin density (model-independent)
+        if n_ep:
+            gs_c = gs[2].subgridspec(nrows_hex, ncols_hex, hspace=0.45, wspace=0.45)
+            panel_c_axes = []
+            for k, ep in enumerate(active_eps):
+                r, c = divmod(k, ncols_hex)
+                ax = fig.add_subplot(gs_c[r, c])
+                panel_c_axes.append(ax)
+                sub = pairs_df[pairs_df["endpoint"] == ep]
+                hb = ax.hexbin(sub["similarity"], sub["activity_diff"], gridsize=25,
+                               cmap="viridis", mincnt=1, bins="log")
+                ax.axvline(reference_threshold, color="white", linestyle="--", linewidth=1.0)
+                ax.axhline(min_diff, color="white", linestyle="--", linewidth=1.0)
+                ax.set_xlabel("Tanimoto similarity", fontsize=9)
+                ax.set_ylabel("|Δactivity|", fontsize=9)
+                ax.tick_params(labelsize=8)
+                ax.text(0.02, 0.98, ep, transform=ax.transAxes,
+                        fontsize=9, fontweight="bold", va="top", ha="left",
+                        color="white",
+                        bbox=dict(facecolor="black", alpha=0.45, edgecolor="none", pad=2))
+                fig.colorbar(hb, ax=ax, label="log10(pairs)", shrink=0.85)
+            for k in range(n_ep, nrows_hex * ncols_hex):
+                r, c = divmod(k, ncols_hex)
+                fig.add_subplot(gs_c[r, c]).set_visible(False)
+            if panel_c_axes:
+                panel_c_axes[0].text(
+                    -0.22, 1.06, "c", transform=panel_c_axes[0].transAxes,
+                    fontsize=16, fontweight="bold", va="bottom", ha="left",
+                )
+
+        fig.savefig(combined_dir / "cliff_sensitivity_combined.png", dpi=dpi, bbox_inches="tight")
+        logger.info("Saved combined/cliff_sensitivity_combined.png")
+        plt.close("all")
+    else:
+        logger.warning("Skipping combined sensitivity figure — run sensitivity for both models first")
 
     logger.info(f"Combined figures saved to {combined_dir}")
 

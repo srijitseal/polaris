@@ -22,10 +22,10 @@ Analysis of the 9 ADME endpoints in the Expansion Tx dataset reveals highly vari
 
 ### Key observations
 
-- **Asymmetric coverage**: Some endpoints have more data in test than train (Caco-2) or vice versa (HLM/MLM CLint), suggesting assay priorities shifted over time.
+- **Asymmetric coverage**: Some endpoints have more data in test than train (Caco-2) or vice versa (HLM/MLM CLint). The cause is not directly observable in the artifact — possible explanations include changing assay panels over time or sampling differences in the competition split — but neither is verified here.
 - **Target distribution shift**: All 9 endpoints show significant KS test differences between train and test. Caco-2 Efflux (KS=0.37) and Caco-2 Papp (KS=0.28) have the strongest shifts.
 - **Sparse endpoints**: MGMB (6% coverage) may be too sparse for robust splitting. MPPB and MBPB (~20%) are borderline.
-- **Implications for splitting**: Only LogD, KSOL, and MLM CLint have enough data for reliable cross-validation across all folds.
+- **Implications for splitting**: All 9 endpoints have been carried through the cluster-, time-, and target-split workflows (NB 2.03–2.05). Sparse endpoints (MGMB 6%, MBPB 19%, MPPB 23%) produce per-fold sample sizes small enough that downstream metric variance is high and CIs are wide — interpret point estimates on these endpoints with care, but they are not excluded from analysis.
 
 ## Plots
 

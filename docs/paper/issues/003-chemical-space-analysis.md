@@ -19,12 +19,12 @@ Butina clustering (cutoff 0.7) on the Expansion Tx dataset (7,608 molecules) rev
 
 - **Highly concentrated series**: The largest cluster (2,572 molecules, 34%) dominates the dataset. Together with clusters 2 (1,301) and 3 (885), these three series contain 62.5% of all molecules.
 - **Long tail**: Beyond the top 5 clusters, most clusters have fewer than 10 members. The median cluster size of 4 reflects this skewed distribution.
-- **Singletons indicate scaffold diversity**: 33 molecules have no neighbor within Tanimoto distance 0.7, representing truly unique scaffolds.
+- **Singletons indicate isolated molecules**: 33 molecules have no neighbor within Tanimoto distance 0.7. This is not the same as broad scaffold diversity (Murcko-scaffold analysis in NB 2.16 finds 3,337 unique scaffolds with very different distribution properties); it just means these molecules are far from all others under ECFP4/Butina.
 - **Implications for splitting**: Random splits will place members of the same large cluster in both train and test, inflating performance. Cluster-based splits (notebook 2.03) should use these clusters to create meaningful distribution shift.
 
 ### Implications for paper
 
-- The concentrated series structure makes this dataset ideal for the IID vs OOD case study (notebook 2.08) — the two largest clusters can serve as the two chemical series.
+- The concentrated series structure makes this dataset ideal for the IID vs OOD case study (notebook 2.09) — the two largest clusters can serve as the two chemical series.
 - Butina cutoff 0.7 produces interpretable clusters at a useful granularity for splitting. The k-means approach in 2.03 will complement this by producing more equally-sized folds.
 
 ## Plots

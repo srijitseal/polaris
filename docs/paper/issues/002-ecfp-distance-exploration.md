@@ -2,7 +2,7 @@
 
 ## Summary
 
-ECFP4 Tanimoto distance analysis of the Expansion Tx dataset (7,608 molecules) reveals moderate chemical diversity (1-NN median 0.20) with a clear distribution shift between train and test: test-to-train 1-NN median (0.373) is nearly double the within-train 1-NN median (0.203), confirming the competition split creates a meaningful generalization challenge.
+ECFP4 Tanimoto distance analysis of the Expansion Tx dataset (7,608 molecules) reveals moderate chemical diversity (1-NN median 0.19) with a clear distribution shift between train and test: test-to-train 1-NN median (0.373) is nearly double the within-train 1-NN median (0.203), confirming the competition split creates a meaningful generalization challenge.
 
 ## Key Findings
 
@@ -22,10 +22,6 @@ ECFP4 Tanimoto distance analysis of the Expansion Tx dataset (7,608 molecules) r
 - **Distribution shift in competition split**: Test-to-train 1-NN median (0.373) vs within-train (0.203) — the test set is substantially farther from training data, creating a real OOD evaluation.
 - **Long tail in test distances**: Test-to-train 1-NN extends to 0.73, with broad distribution from 0.1 to 0.7 — many test molecules have no close training analog.
 - **Spike at zero in within-train**: Large spike at distance ~0 in within-train 1-NN indicates near-duplicate or very similar compounds within the training set (likely from same chemical series).
-
-### Comparison to Biogen case study
-- Similar to Cas's Biogen HLM analysis where the dataset was diverse "with lots of datapoints having far neighbors"
-- The Expansion Tx dataset shows a cleaner separation between NN distances and bulk pairwise distances
 
 ## Plots
 

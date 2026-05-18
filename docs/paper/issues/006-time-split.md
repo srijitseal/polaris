@@ -18,7 +18,7 @@ Expanding-window time-split using ordinal molecule indices produces 4-fold CV wi
 ### Key observations
 
 - **Cluster-split creates larger distribution shift**: Cluster-split pooled median (0.408) > time-split (0.350). Cluster-based splitting is more effective at separating structurally distinct molecules.
-- **Non-monotonic distance over time**: Fold 2 has the lowest median distance (0.302), not fold 0. This suggests the drug discovery program cycled back to explore analogs of earlier series.
+- **Non-monotonic distance over time**: Fold 2 has the lowest median distance (0.301), not fold 0. This indicates that structural drift over mol_index is not monotonic; the artifact alone does not establish the program-history cause.
 - **Complementary splitting strategies**: Time-split captures deployment-relevant temporal shift; cluster-split captures structural novelty. Both are informative but test different aspects of generalization.
 - **Balanced fold sizes**: Expanding window produces equal-sized test windows (~1,461 per fold for LogD).
 

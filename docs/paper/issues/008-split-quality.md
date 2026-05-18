@@ -1,4 +1,4 @@
-# Split quality diagnostics confirm three complementary generalization axes
+# Split quality diagnostics confirm three complementary splitting strategies stress distinct deployment scenarios
 
 ## Summary
 
@@ -16,7 +16,7 @@ All strategies produce reasonably balanced folds. Cluster-split (5 folds) ranges
 |----------|-------------------|----------------|
 | Cluster-split | 0.369–0.440 | Highest — tests structural generalization |
 | Time-split | 0.301–0.386 | Moderate — temporal drift includes some series continuity |
-| Target-split | 0.245–0.286 | Lowest — similar values ≈ similar structures |
+| Target-split | 0.243–0.288 | Lowest — similar values ≈ similar structures |
 
 ### Structural overlap (% test with 1-NN < 0.1)
 
@@ -24,7 +24,7 @@ All strategies produce reasonably balanced folds. Cluster-split (5 folds) ranges
 |----------|--------------|
 | Cluster-split | 0.0% |
 | Time-split | 0.8–1.4% |
-| Target-split | 2.9–4.0% |
+| Target-split | 2.7–4.2% |
 
 Cluster-split effectively eliminates near-duplicates between train and test. Target-split retains the most overlap, consistent with the observation that structurally similar molecules share similar property values.
 
@@ -50,7 +50,7 @@ The three strategies are complementary:
 2. **Time-split** tests whether models generalize to future compounds (temporal drift)
 3. **Target-split** tests whether models extrapolate beyond the training value range
 
-Together they cover structure, time, and target-value axes of generalization.
+The three axes are correlated, not orthogonal — target-split's low structural distance reflects that similar values often come from similar structures — but each strategy stresses a distinct deployment scenario (hit identification, prospective deployment, lead optimization).
 
 ## Plots
 

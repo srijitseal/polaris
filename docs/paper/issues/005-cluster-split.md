@@ -22,7 +22,7 @@ Cluster-based cross-validation splitting using Empirical Kernel Map (KernelPCA o
 
 ### Key observations
 
-- **Over-clustering is critical**: Direct k=5 K-Means produced ratios up to 6.6 due to uneven chemical space. Over-clustering (k=20) + greedy assignment solves this.
+- **Over-clustering is critical**: Direct k=5 K-Means produces highly imbalanced folds because the dataset has a few dominant chemical series (NB 2.01: top 3 Butina clusters hold 62.5% of molecules). Over-clustering to k=20 and greedily assigning clusters to 5 folds breaks up those large clusters and yields the balanced ratios above. Specific imbalance numbers from the direct-k=5 control run are not retained as artifacts in this repo (ADR-001 captures the design rationale).
 - **Per-endpoint splitting**: Each endpoint gets its own fold assignments based only on molecules with data for that endpoint. This avoids folds with very few measurements for sparse endpoints.
 - **Stochasticity across repeats**: Different random seeds produce slightly different fold assignments, enabling 5x5 repeated CV (25 total train/test splits per endpoint).
 - **Even MGMB works**: The sparsest endpoint (431 molecules) still gets balanced folds of ~86 each.

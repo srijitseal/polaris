@@ -316,6 +316,85 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
         )
         logger.info(f"Saved {fname}.png")
 
+    # ── Combined 3-panel figure: (A) R² bars, (B) XGBoost scatter, (C) CheMeleon scatter
+    xgb_pred_path = output_dir / "xgboost" / "predictions.parquet"
+    cm_pred_path = output_dir / "chemeleon" / "predictions.parquet"
+    if xgb_pred_path.exists() and cm_pred_path.exists():
+        import matplotlib.gridspec as gridspec
+
+        xgb_pred = pd.read_parquet(xgb_pred_path)
+        cm_pred = pd.read_parquet(cm_pred_path)
+        active_endpoints = sorted(xgb["endpoint"].unique())
+        n_ep = len(active_endpoints)
+        ncols_scatter = min(n_ep, 3)
+        nrows_scatter = (n_ep + ncols_scatter - 1) // ncols_scatter
+
+        fig = plt.figure(figsize=(6 * ncols_scatter, 5 * (1 + 2 * nrows_scatter)))
+        gs = gridspec.GridSpec(1 + 2 * nrows_scatter, ncols_scatter,
+                               height_ratios=[1.2] + [1] * (2 * nrows_scatter),
+                               hspace=0.35, wspace=0.30)
+
+        # Panel A: R² bar chart (full width)
+        ax_a = fig.add_subplot(gs[0, :])
+        endpoints = sorted(xgb["endpoint"].unique())
+        n_models = 2
+        x = np.arange(len(endpoints))
+        width = 0.8 / n_models
+        for i, (model_name, df_met) in enumerate([("xgboost", xgb), ("chemeleon", chemeleon)]):
+            means = [df_met[df_met["endpoint"] == ep]["r2"].values[0] for ep in endpoints]
+            offset = (i - n_models / 2 + 0.5) * width
+            ax_a.bar(x + offset, means, width,
+                     label=MODEL_LABELS.get(model_name, model_name),
+                     color=MODEL_COLORS.get(model_name, f"C{i}"),
+                     edgecolor="white", alpha=0.85)
+        ax_a.set_xticks(x)
+        ax_a.set_xticklabels(endpoints, rotation=45, ha="right", fontsize=8)
+        ax_a.set_ylabel("R²")
+        ax_a.set_title("A", fontsize=16, fontweight="bold", loc="left")
+        ax_a.legend()
+
+        # Panels B and C: scatter plots
+        for panel_idx, (model_name, pred_df, metrics_df) in enumerate([
+            ("XGBoost", xgb_pred, xgb),
+            ("CheMeleon", cm_pred, chemeleon),
+        ]):
+            model_color = MODEL_COLORS.get(model_name.lower(), "steelblue")
+            panel_letter = chr(ord("B") + panel_idx)
+            row_offset = 1 + panel_idx * nrows_scatter
+
+            for ax_idx, ep in enumerate(active_endpoints):
+                row = row_offset + ax_idx // ncols_scatter
+                col = ax_idx % ncols_scatter
+                ax = fig.add_subplot(gs[row, col])
+
+                ep_pred = pred_df[pred_df["endpoint"] == ep]
+                ax.scatter(ep_pred["y_true"], ep_pred["y_pred"], s=5, alpha=0.3,
+                           color=model_color, rasterized=True)
+
+                lo = min(ep_pred["y_true"].min(), ep_pred["y_pred"].min())
+                hi = max(ep_pred["y_true"].max(), ep_pred["y_pred"].max())
+                ax.plot([lo, hi], [lo, hi], "k--", alpha=0.3, linewidth=1)
+
+                r2_val = metrics_df.loc[metrics_df["endpoint"] == ep, "r2"].values[0]
+                ax.text(0.05, 0.95, f"R²={r2_val:.3f}", transform=ax.transAxes,
+                        fontsize=8, verticalalignment="top", color=model_color)
+
+                suffix = " (log)" if ep in LOG_TRANSFORM_ENDPOINTS else ""
+                ax.set_xlabel(f"True{suffix}")
+                ax.set_ylabel(f"Predicted{suffix}")
+                ax.set_title(f"{ep}" if ax_idx > 0 else f"{panel_letter} — {model_name}: {ep}",
+                             fontsize=10)
+
+            # Hide unused axes in this panel's rows
+            for ax_idx in range(n_ep, nrows_scatter * ncols_scatter):
+                row = row_offset + ax_idx // ncols_scatter
+                col = ax_idx % ncols_scatter
+                fig.add_subplot(gs[row, col]).set_visible(False)
+
+        fig.savefig(combined_dir / "baseline_combined_panel.png", dpi=dpi, bbox_inches="tight")
+        plt.close("all")
+        logger.info("Saved baseline_combined_panel.png")
+
     logger.info(f"Combined figures saved to {combined_dir}")
 
 

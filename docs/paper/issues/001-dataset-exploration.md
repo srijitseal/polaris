@@ -2,7 +2,7 @@
 
 ## Summary
 
-Initial exploration of the ML-ready Expansion Tx dataset (7,608 molecules, 9 endpoints) reveals highly variable endpoint coverage (6-96%), heavy right-skew in clearance endpoints, and clear temporal separation between train and test splits via ordinal molecule indices. Physicochemical properties suggest these RNA-targeting compounds frequently exceed Lipinski limits, consistent with the hypothesis that they differ from typical protein modulators.
+Initial exploration of the ML-ready Expansion Tx dataset (7,608 molecules, 9 endpoints) reveals highly variable endpoint coverage (6–96%), heavy right-skew in clearance endpoints, and clear temporal separation between train and test splits via ordinal molecule indices. Physicochemical properties are mostly within Lipinski limits — these are not the heavy/flat profile sometimes ascribed to RNA-targeted compounds.
 
 ## Key Findings
 
@@ -24,7 +24,7 @@ Initial exploration of the ML-ready Expansion Tx dataset (7,608 molecules, 9 end
 | MBPB | 1,426 | 19% |
 | MGMB | 431 | 6% |
 
-- Most molecules have 3-5 endpoints measured
+- Median molecule has 4 endpoints measured (mean 4.73); distribution is multimodal with peaks at 2 (n=1,251), 4 (n=1,804), and 6 (n=1,364) endpoints
 - Protein binding endpoints (MPPB, MBPB, MGMB) are severely sparse
 
 ### Endpoint distributions
@@ -38,12 +38,20 @@ Initial exploration of the ML-ready Expansion Tx dataset (7,608 molecules, 9 end
 - Test median molecule index: 22,478
 - Test molecules are clearly later in the ordinal sequence — validates time-split approach
 
-### Physicochemical properties (RNA-targeting hypothesis)
-- Median MW ~480, but substantial fraction exceeds Lipinski 500 limit
-- LogP centered ~3.5, mostly within Lipinski limit of 5
-- High HBA counts (median ~6, many exceed Lipinski limit of 10)
-- High aromatic ring count (median ~4-5) and low FractionCSP3 (~0.2) — consistent with RNA-binding requiring planar, aromatic scaffolds
-- These properties differ from typical protein-targeting drug-like compounds
+### Physicochemical properties
+
+| Property | Median | Mean | % Lipinski violation |
+|----------|--------|------|----------------------|
+| MolWt | 382.9 | 393.2 | 3.5% (>500) |
+| MolLogP | 3.33 | 3.34 | 3.9% (>5) |
+| NumHBA | 4 | 4.78 | 0.6% (>10) |
+| NumHBD | 1 | 1.01 | 0.0% (>5) |
+| NumAromaticRings | 3 | 3.33 | — |
+| FractionCSP3 | 0.36 | 0.35 | — |
+| TPSA | 63.2 | 65.9 | — |
+| NumRotatableBonds | 5 | 4.71 | — |
+
+Combining the four core Ro5 rules (MW ≤ 500, LogP ≤ 5, HBA ≤ 10, HBD ≤ 5), **93.5% of the dataset passes all four**. The coarse physicochemical panel here does not by itself show a distinctive RNA-targeting signature — median MW ~383, median 3 aromatic rings, FractionCSP3 ~0.36.
 
 ## Plots
 
@@ -65,4 +73,4 @@ Outputs: `data/processed/0.01-seal-dataset-exploration/`
 
 ## Conclusion
 
-The dataset is suitable for the planned generalization analyses, but endpoint sparsity means some endpoints (especially MGMB, MBPB, MPPB) may have insufficient data for robust splitting experiments. LogD and KSOL have near-complete coverage and should be prioritized. The ordinal ordering clearly supports time-split experiments. The RNA-targeting physicochemical profile (high MW, high aromaticity, low sp3 fraction) is a distinctive feature worth highlighting in the paper.
+The dataset is suitable for the planned generalization analyses, but endpoint sparsity means some endpoints (especially MGMB, MBPB, MPPB) may have insufficient data for robust splitting experiments. LogD and KSOL have near-complete coverage and should be prioritized. The ordinal ordering clearly supports time-split experiments. Physicochemical properties are mostly within Lipinski space (93.5% pass all four core Ro5 rules) — the coarse physchem panel does not by itself show a distinctive RNA-targeting signature.

@@ -14,6 +14,7 @@ Outputs:
     data/processed/0.01-seal-dataset-exploration/endpoint_distributions.png
     data/processed/0.01-seal-dataset-exploration/ordinal_ordering.png
     data/processed/0.01-seal-dataset-exploration/physicochemical_properties.png
+    data/processed/0.01-seal-dataset-exploration/physicochemical_summary.csv
     data/processed/0.01-seal-dataset-exploration/summary_statistics.csv
 """
 
@@ -47,6 +48,9 @@ ENDPOINTS = [
 ]
 
 
+LIPINSKI_LIMITS = {"MW": 500, "LogP": 5, "HBA": 10, "HBD": 5}
+
+
 def compute_physicochemical(smiles_series: pd.Series) -> pd.DataFrame:
     """Compute physicochemical properties from SMILES using RDKit."""
     records = []
@@ -68,6 +72,33 @@ def compute_physicochemical(smiles_series: pd.Series) -> pd.DataFrame:
             }
         )
     return pd.DataFrame(records)
+
+
+def summarize_physicochemical(physchem: pd.DataFrame) -> pd.DataFrame:
+    """Summarize physicochemical properties with medians and Lipinski thresholds."""
+    rows = []
+    for prop in physchem.columns:
+        values = physchem[prop].dropna()
+        row = {
+            "property": prop,
+            "n": len(values),
+            "mean": values.mean(),
+            "median": values.median(),
+            "std": values.std(),
+            "q1": values.quantile(0.25),
+            "q3": values.quantile(0.75),
+            "min": values.min(),
+            "max": values.max(),
+        }
+        if prop in LIPINSKI_LIMITS:
+            limit = LIPINSKI_LIMITS[prop]
+            row["lipinski_limit"] = limit
+            row["pct_violation"] = ((values > limit).mean()) * 100
+        else:
+            row["lipinski_limit"] = np.nan
+            row["pct_violation"] = np.nan
+        rows.append(row)
+    return pd.DataFrame(rows)
 
 
 @app.command()
@@ -206,10 +237,9 @@ def main(
         axes[i].set_ylabel("")
 
     # Add Lipinski reference lines where applicable
-    lipinski_limits = {"MW": 500, "LogP": 5, "HBA": 10, "HBD": 5}
     for i, prop in enumerate(props):
-        if prop in lipinski_limits:
-            axes[i].axhline(lipinski_limits[prop], color="red", linestyle="--", alpha=0.7, label=f"Lipinski ({lipinski_limits[prop]})")
+        if prop in LIPINSKI_LIMITS:
+            axes[i].axhline(LIPINSKI_LIMITS[prop], color="red", linestyle="--", alpha=0.7, label=f"Lipinski ({LIPINSKI_LIMITS[prop]})")
             axes[i].legend(fontsize=8)
 
     fig.suptitle("Physicochemical properties (RNA-targeting compounds)", fontsize=13, y=1.01)
@@ -217,6 +247,11 @@ def main(
     fig.savefig(output_dir / "physicochemical_properties.png", dpi=dpi, bbox_inches="tight")
     logger.info(f"Saved physicochemical_properties.png")
     plt.close("all")
+
+    physchem_summary = summarize_physicochemical(physchem)
+    physchem_summary.to_csv(output_dir / "physicochemical_summary.csv", index=False)
+    logger.info(f"Saved physicochemical_summary.csv")
+    logger.info(f"\n{physchem_summary.to_string(index=False)}")
 
     # ── 7. Summary statistics ─────────────────────────────────────────
     logger.info("Generating summary statistics")

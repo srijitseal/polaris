@@ -56,6 +56,8 @@ from polaris_generalization.config import INTERIM_DATA_DIR, PROCESSED_DATA_DIR
 from polaris_generalization.tuning import tune_xgboost
 from polaris_generalization.visualization import (
     DEFAULT_DPI,
+    MODEL_COLORS,
+    MODEL_LABELS,
     plot_model_comparison_bars,
     set_style,
 )
@@ -415,6 +417,139 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
                 combined_dir / f"{fname}_comparison.png", dpi=dpi,
             )
             logger.info(f"Saved {fname}_comparison.png")
+
+    # ── Combined spread scatter: pred range vs true range, XGBoost vs CheMeleon ──
+    xgb_met_path_s = output_dir / "xgboost" / "consistency_metrics.csv"
+    chem_met_path_s = output_dir / "chemeleon" / "consistency_metrics.csv"
+
+    if xgb_met_path_s.exists() and chem_met_path_s.exists():
+        xgb_cons = pd.read_csv(xgb_met_path_s)
+        chem_cons = pd.read_csv(chem_met_path_s)
+
+        fig, axes = plt.subplots(2, 3, figsize=(14, 9))
+
+        for row, (model_label, cons_df) in enumerate(
+            [("XGBoost", xgb_cons), ("CheMeleon", chem_cons)]
+        ):
+            for col, vtype in enumerate(VARIANT_ORDER):
+                ax = axes[row, col]
+                vtype_data = cons_df[cons_df["variant_type"] == vtype]
+
+                if vtype_data.empty:
+                    ax.set_visible(False)
+                    continue
+
+                ax.scatter(
+                    vtype_data["true_range"], vtype_data["pred_range"],
+                    color=VARIANT_COLORS[vtype], alpha=0.3, s=15, edgecolors="none",
+                )
+                max_val = max(
+                    vtype_data["true_range"].max(),
+                    vtype_data["pred_range"].max(),
+                )
+                ax.plot([0, max_val], [0, max_val], "k--", alpha=0.4, label="y = x")
+
+                ax.set_xlabel("True activity range", fontsize=10)
+                ax.set_ylabel("Predicted range", fontsize=10)
+                ax.tick_params(labelsize=9)
+                ax.legend(fontsize=8)
+
+                if row == 0:
+                    vtype_label = vtype.replace("_", " ").title()
+                    ax.set_title(vtype_label, fontsize=12, fontweight="bold")
+
+            axes[row, 0].annotate(
+                model_label, xy=(-0.30, 0.5),
+                xycoords="axes fraction", fontsize=12, fontweight="bold",
+                rotation=90, va="center", ha="center",
+            )
+
+        fig.tight_layout()
+        fig.savefig(
+            combined_dir / "spread_scatter_combined.png",
+            dpi=dpi, bbox_inches="tight",
+        )
+        logger.info("Saved spread_scatter_combined.png")
+        plt.close("all")
+    else:
+        logger.warning("Skipping combined spread scatter — run both models first")
+
+    # ── Combined boxplot: pred CV for all 3 variant types, XGBoost vs CheMeleon ──
+    xgb_met_path = output_dir / "xgboost" / "consistency_metrics.csv"
+    chem_met_path = output_dir / "chemeleon" / "consistency_metrics.csv"
+
+    if xgb_met_path.exists() and chem_met_path.exists():
+        xgb_met = pd.read_csv(xgb_met_path)
+        chem_met = pd.read_csv(chem_met_path)
+
+        active_endpoints = sorted(
+            set(xgb_met["endpoint"].unique()) & set(chem_met["endpoint"].unique())
+        )
+        n_ep = len(active_endpoints)
+        vtype_labels = {
+            "stereoisomer": "Stereoisomer",
+            "scaffold_decoration": "Scaffold decoration",
+            "random": "Random",
+        }
+
+        def _agg(met_df: pd.DataFrame, vtype: str):
+            sub = met_df[met_df["variant_type"] == vtype]
+            medians, q25s, q75s = [], [], []
+            for ep in active_endpoints:
+                vals = sub[sub["endpoint"] == ep]["pred_cv"].dropna().values
+                medians.append(np.median(vals) if len(vals) else 0.0)
+                q25s.append(np.percentile(vals, 25) if len(vals) else 0.0)
+                q75s.append(np.percentile(vals, 75) if len(vals) else 0.0)
+            medians = np.array(medians)
+            lower = medians - np.array(q25s)
+            upper = np.array(q75s) - medians
+            return medians, np.array([lower, upper])
+
+        fig, axes = plt.subplots(
+            len(VARIANT_ORDER), 1,
+            figsize=(max(n_ep * 1.6, 10), 3.5 * len(VARIANT_ORDER)),
+            sharex=True,
+        )
+
+        x = np.arange(n_ep)
+        bar_w = 0.35
+
+        for row, vtype in enumerate(VARIANT_ORDER):
+            ax = axes[row]
+            xgb_meds, xgb_err = _agg(xgb_met, vtype)
+            chem_meds, chem_err = _agg(chem_met, vtype)
+
+            ax.bar(
+                x - bar_w / 2, xgb_meds, bar_w,
+                yerr=xgb_err, capsize=3,
+                color=MODEL_COLORS["xgboost"], edgecolor="black", linewidth=0.5,
+                label=MODEL_LABELS["xgboost"], alpha=0.85,
+            )
+            ax.bar(
+                x + bar_w / 2, chem_meds, bar_w,
+                yerr=chem_err, capsize=3,
+                color=MODEL_COLORS["chemeleon"], edgecolor="black", linewidth=0.5,
+                label=MODEL_LABELS["chemeleon"], alpha=0.85,
+            )
+
+            ax.set_ylabel("Median prediction CV", fontsize=10)
+            ax.set_title(vtype_labels[vtype], fontsize=11, fontweight="bold")
+            ax.legend(fontsize=8, loc="upper right")
+            ax.set_xticks(x)
+            if row == len(VARIANT_ORDER) - 1:
+                ax.set_xticklabels(active_endpoints, fontsize=8, rotation=30, ha="right")
+            ax.text(-0.06, 1.02, chr(ord("a") + row), transform=ax.transAxes,
+                    fontsize=14, fontweight="bold", va="bottom", ha="left")
+
+        fig.tight_layout()
+        fig.savefig(
+            combined_dir / "pred_cv_all_variants_combined.png",
+            dpi=dpi, bbox_inches="tight",
+        )
+        logger.info("Saved pred_cv_all_variants_combined.png")
+        plt.close("all")
+    else:
+        logger.warning("Skipping combined boxplot — run both models first")
 
     logger.info(f"Combined figures saved to {combined_dir}")
 

@@ -28,7 +28,7 @@ Max Tanimoto similarity analysis of all 7,608 ExpansionRX compounds against 2.85
 
 1. **Structural novelty is extreme**: Only 1.8% of ExpansionRX compounds have a ChEMBL neighbour within Tc > 0.7. The median max similarity of 0.444 falls in the "weakly similar" regime where ECFP4 Tanimoto correlations with shared activity break down.
 2. **ADME data coverage is even sparser**: Against ChEMBL compounds with ADME assay data, the median drops to 0.388 — more than half of ExpansionRX molecules have no ADME-measured analogue above Tc 0.4.
-3. **RNA-targeting chemical space is distinct**: These compounds were designed for RNA targets, yielding larger, flatter, more polar molecules than typical protein-targeting drug candidates.
+3. **ExpansionRX occupies distinct public-database chemical space**: The ChEMBL novelty here is established by max-similarity distributions, not by extreme physicochemical descriptors alone. The coarse physchem panel in NB 0.01 does not, by itself, show a distinctive RNA-targeting signature.
 4. **Implications for benchmarking**: Public ADMET benchmarks predominantly draw from ChEMBL. Models benchmarked on these datasets evaluate interpolation within well-covered chemical space. Performance on ExpansionRX represents a genuine extrapolation test.
 
 ## Plots

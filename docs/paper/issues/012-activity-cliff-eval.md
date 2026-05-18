@@ -2,7 +2,7 @@
 
 ## Summary
 
-Activity cliffs — pairs of structurally similar molecules (Tanimoto similarity > 0.85) with absolute activity differences ≥ 1.0 log units (approximately 10-fold change) — comprise 0–4.6% of molecules per endpoint. Optuna TPE-tuned XGBoost (30 trials, 3-fold CV, 9 hyperparameters; see [ADR-002](../decisions/002-optuna-hyperparameter-tuning.md)) trained with cluster-split CV shows higher error on cliff molecules than non-cliff molecules across all 7 endpoints with sufficient cliff populations. MBPB has 0 cliff pairs and MPPB only 4 cliff molecules at this threshold, making them unsuitable for separate evaluation.
+Activity cliffs — pairs of structurally similar molecules (Tanimoto similarity > 0.85) with absolute activity differences ≥ 1.0 log units (approximately 10-fold change) — comprise 0–4.6% of molecules per endpoint. Optuna TPE-tuned XGBoost (30 trials, 3-fold CV, 9 hyperparameters; see [ADR-002](../../decisions/002-optuna-hyperparameter-tuning.md)) trained with cluster-split CV shows higher error on cliff molecules than non-cliff molecules across all 7 endpoints with sufficient cliff populations. MBPB has 0 cliff pairs and MPPB only 4 cliff molecules at this threshold, making them unsuitable for separate evaluation.
 
 ## Method
 
@@ -33,18 +33,18 @@ Activity cliffs — pairs of structurally similar molecules (Tanimoto similarity
 ### Per-endpoint performance: cliff vs non-cliff
 
 | Endpoint | Non-cliff RAE | Cliff RAE | Non-cliff R² | Cliff R² | Cliff Spearman |
-|----------|-------------|-----------|-------------|---------|---------------|
-| Caco-2 Efflux | 0.581 | 0.949 | 0.576 | 0.025 | 0.409 |
-| Caco-2 Papp A>B | 0.643 | 0.907 | 0.507 | 0.070 | 0.257 |
-| HLM CLint | 0.811 | 0.866 | 0.288 | 0.243 | 0.630 |
-| MLM CLint | 0.696 | 0.843 | 0.495 | 0.268 | 0.582 |
-| KSOL | 0.703 | 0.807 | 0.432 | 0.269 | 0.472 |
-| MGMB | 0.548 | 0.760 | 0.608 | -0.204 | 0.872 |
-| LogD | 0.491 | 0.593 | 0.735 | 0.590 | 0.768 |
-| MPPB | -- | -- | -- | -- | -- |
-| MBPB | -- | -- | -- | -- | -- |
+|----------|---------------|-----------|--------------|----------|----------------|
+| Caco-2 Efflux | 0.585 | 0.962 | 0.574 | -0.006 | 0.104 |
+| Caco-2 Papp A>B | 0.650 | 0.879 | 0.496 | 0.109 | 0.200 |
+| HLM CLint | 0.810 | 0.865 | 0.286 | 0.240 | 0.602 |
+| MLM CLint | 0.704 | 0.829 | 0.486 | 0.302 | 0.600 |
+| KSOL | 0.698 | 0.807 | 0.438 | 0.294 | 0.502 |
+| MGMB | 0.555 | 0.776 | 0.604 | -0.226 | 0.718 |
+| LogD | 0.491 | 0.592 | 0.736 | 0.584 | 0.765 |
+| MPPB | 0.622 | — | 0.580 | — | — |
+| MBPB | 0.562 | — | 0.624 | — | — |
 
-Cliff RAE exceeds non-cliff RAE for all 7 endpoints with sufficient cliff molecules. The effect is most pronounced for Caco-2 Efflux (0.949 vs 0.581), Caco-2 Papp A>B (0.907 vs 0.643), and HLM CLint (0.866 vs 0.811).
+Cliff RAE exceeds non-cliff RAE for all 7 endpoints with sufficient cliff molecules. The effect is most pronounced for Caco-2 Efflux (0.962 vs 0.585), Caco-2 Papp A>B (0.879 vs 0.650), and MGMB (0.776 vs 0.555). Cliff R² is negative or near-zero for Caco-2 Efflux (−0.006) and MGMB (−0.226) — model performs no better than predicting the cliff-set mean.
 
 ### Change from previous version
 
@@ -52,17 +52,16 @@ Previous version used a relative top-quartile threshold, giving 6–10% cliff pr
 
 ## Plots
 
-- `data/processed/2.10-seal-activity-cliff-eval/cliff_characterization.png` — Cliff prevalence and pair counts per endpoint
-<!-- Paste: cliff_characterization.png -->
-- `data/processed/2.10-seal-activity-cliff-eval/squared_error_distributions.png` — Cliff vs non-cliff SE distributions
-<!-- Paste: squared_error_distributions.png -->
-- `data/processed/2.10-seal-activity-cliff-eval/rae_by_endpoint.png` — RAE comparison
-<!-- Paste: rae_by_endpoint.png -->
+- `data/processed/2.10-seal-activity-cliff-eval/cliff_characterization.png` — cliff prevalence and pair counts per endpoint
+- `data/processed/2.10-seal-activity-cliff-eval/xgboost/squared_error_distributions.png` — cliff vs non-cliff SE distributions
+- `data/processed/2.10-seal-activity-cliff-eval/xgboost/rae_by_endpoint.png` — RAE comparison
+- `data/processed/2.10-seal-activity-cliff-eval/xgboost/r2_by_endpoint.png`, `mae_by_endpoint.png`, `spearman_by_endpoint.png`, `kendall_by_endpoint.png`, `median_se_by_endpoint.png` — per-metric panels
+- Combined XGBoost vs CheMeleon panels: `data/processed/2.10-seal-activity-cliff-eval/combined/`
 
 ## Reproduce
 
 ```bash
-pixi run -e cheminformatics python notebooks/2.10-seal-activity-cliff-eval.py
+pixi run -e cheminformatics python notebooks/2.10-seal-activity-cliff-eval.py main
 ```
 
 ## Source
@@ -71,7 +70,7 @@ pixi run -e cheminformatics python notebooks/2.10-seal-activity-cliff-eval.py
 
 ## Follow-up: similarity-threshold sensitivity sweep
 
-A `sensitivity` subcommand sweeps the Tanimoto cutoff across {0.70, 0.75, 0.80, 0.85, 0.90, 0.95} while holding |Δactivity| ≥ 1.0 log unit fixed, reusing the existing out-of-fold predictions (no retraining). Cliff prevalence falls ~10× from 0.70 to 0.85 and ~5× from 0.85 to 0.95. RAE gap (cliff − non-cliff) is near zero or negative below 0.80 for LogD/KSOL/MLM (the cliff label is not selective), becomes reliably positive at ≥ 0.85, and above 0.90 four of nine endpoints collapse to zero cliff pairs. 0.85 on ECFP4 is therefore the empirical knee of the curve for this dataset rather than a universal convention: Stumpfe & Bajorath 2014's 0.85 applies to MACCS (ECFP4 equivalent ~0.56); van Tilborg et al. 2022 (MoleculeACE) use 0.9 on ECFP4 under a soft consensus across three similarity measures.
+A `sensitivity` subcommand sweeps the Tanimoto cutoff across {0.70, 0.75, 0.80, 0.85, 0.90, 0.95} while holding |Δactivity| ≥ 1.0 log unit fixed, reusing the existing out-of-fold predictions (no retraining). Mean cliff prevalence falls ~12.7× from 0.70 to 0.85 and ~10.2× from 0.85 to 0.95 across endpoints. RAE gap (cliff − non-cliff) is near zero or negative below 0.80 for LogD/KSOL/MLM (the cliff label is not selective), becomes reliably positive at ≥ 0.85, and the cliff set becomes very sparse at stricter cutoffs: 3 of 9 endpoints have zero cliff pairs at 0.90, rising to 4 of 9 at 0.95. 0.85 on ECFP4 is therefore the empirical knee of the curve for this dataset rather than a universal convention: Stumpfe & Bajorath 2014's 0.85 applies to MACCS (ECFP4 equivalent ~0.56); van Tilborg et al. 2022 (MoleculeACE) use 0.9 on ECFP4 under a soft consensus across three similarity measures.
 
 ### Outputs saved
 
@@ -86,3 +85,33 @@ A `sensitivity` subcommand sweeps the Tanimoto cutoff across {0.70, 0.75, 0.80, 
 ```bash
 pixi run -e cheminformatics python notebooks/2.10-seal-activity-cliff-eval.py sensitivity
 ```
+
+---
+
+## Update: CheMeleon foundation model (2026-05-05)
+
+Re-ran with CheMeleon (cluster-split CV, 5 folds, fine-tuned per fold). Cliff definition unchanged: Tanimoto > 0.85 + |Δy| ≥ 1.0 log unit. Cliff/non-cliff partitions identical to XGBoost run (counts unchanged).
+
+**Trend matches XGBoost. Cliff RAE > non-cliff RAE for all 7 endpoints with sufficient cliffs.**
+
+### Cliff RAE vs non-cliff RAE
+
+| Endpoint | n_cliff | RAE cliff XGB | RAE non-cliff XGB | RAE cliff CM | RAE non-cliff CM |
+|----------|---------|---------------|-------------------|--------------|------------------|
+| LogD | 334 | 0.592 | 0.491 | 0.422 | 0.360 |
+| KSOL | 253 | 0.807 | 0.698 | 0.713 | 0.617 |
+| HLM CLint | 37 | 0.865 | 0.810 | 0.939 | 0.792 |
+| MLM CLint | 144 | 0.829 | 0.704 | 0.801 | 0.684 |
+| Caco-2 Papp A>B | 6 | 0.879 | 0.650 | 0.942 | 0.677 |
+| Caco-2 Efflux | 22 | 0.962 | 0.585 | 0.895 | 0.586 |
+| MGMB | 5 | 0.776 | 0.555 | 0.944 | 0.501 |
+
+MPPB (4 cliffs) and MBPB (0 cliffs) excluded from cliff evaluation in both models.
+
+CheMeleon does not selectively help cliff molecules — non-cliff RAE drops by 0.05–0.13 from XGBoost, while the cliff/non-cliff RAE gap remains 0.06–0.44 (median ~0.13). Interpolation failure mode is preserved under a foundation model.
+
+### Source
+
+- `data/processed/2.10-seal-activity-cliff-eval/chemeleon/summary_metrics.csv`
+- GitHub comment: https://github.com/srijitseal/polaris/issues/12#issuecomment-4381083314
+- Reproduce: `pixi run -e cheminformatics python notebooks/2.10-seal-activity-cliff-eval.py main --model chemeleon`

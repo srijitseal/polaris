@@ -2,7 +2,7 @@
 
 ## Summary
 
-Expanding-window CV sorted by endpoint value tests model extrapolation beyond the training target range. For LogD, test-to-train 1-NN distances are low (median 0.245–0.286), much lower than cluster-split (0.410) or time-split (0.350), confirming that molecules with similar target values tend to be structurally similar. CLint endpoints show extreme value ranges in later folds, creating challenging extrapolation scenarios.
+Expanding-window CV sorted by endpoint value tests model extrapolation beyond the training target range. For LogD, test-to-train 1-NN distances are low (median 0.243–0.288), much lower than cluster-split (0.369–0.440) or time-split (0.301–0.386), confirming that molecules with similar target values tend to be structurally similar. CLint endpoints show extreme value ranges in later folds, creating challenging extrapolation scenarios.
 
 ## Key Findings
 
@@ -10,16 +10,16 @@ Expanding-window CV sorted by endpoint value tests model extrapolation beyond th
 
 | Fold | Test size | Value range | Median 1-NN |
 |------|-----------|-------------|-------------|
-| 0 | 1,461 | 1.20–1.90 | 0.286 |
+| 0 | 1,461 | 1.20–1.90 | 0.288 |
 | 1 | 1,461 | 1.90–2.40 | 0.250 |
-| 2 | 1,461 | 2.40–3.10 | 0.245 |
-| 3 | 1,465 | 3.10–5.20 | 0.255 |
+| 2 | 1,461 | 2.40–3.10 | 0.243 |
+| 3 | 1,465 | 3.10–5.20 | 0.254 |
 
 ### Distance comparison across splitting strategies (LogD)
 
 | Strategy | Pooled median 1-NN |
 |----------|-------------------|
-| Cluster-split | 0.410 |
+| Cluster-split | 0.408 |
 | Time-split | 0.350 |
 | Target-split | ~0.260 |
 
@@ -28,7 +28,7 @@ Expanding-window CV sorted by endpoint value tests model extrapolation beyond th
 - **Low structural distances**: Target-split produces the lowest test-to-train structural distances of all three strategies. This is expected — molecules with similar endpoint values are often from the same chemical series.
 - **Extrapolation challenge is in target space, not structure space**: The difficulty here is predicting values outside the training range, not predicting for structurally novel molecules.
 - **Extreme tails in CLint**: HLM CLint fold 3 covers 58.5–2589.9 (44x range), MLM CLint fold 3 covers 639–10,355. These extreme values will be very challenging to predict.
-- **Complementary to other strategies**: Cluster-split tests structural generalization, time-split tests temporal generalization, target-split tests value extrapolation. Together they cover three orthogonal axes of generalization.
+- **Complementary to other strategies**: Cluster-split tests structural generalization, time-split tests temporal generalization, target-split tests value extrapolation. The three axes are correlated rather than orthogonal in this dataset (low target-split structural distance is precisely what shows the value/structure correlation), but each strategy stresses a distinct deployment scenario.
 
 ## Plots
 

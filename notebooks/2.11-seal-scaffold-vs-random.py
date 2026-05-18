@@ -50,6 +50,8 @@ from polaris_generalization.config import INTERIM_DATA_DIR, PROCESSED_DATA_DIR
 from polaris_generalization.tuning import tune_xgboost
 from polaris_generalization.visualization import (
     DEFAULT_DPI,
+    MODEL_COLORS,
+    MODEL_LABELS,
     plot_model_comparison_bars,
     set_style,
 )
@@ -388,6 +390,47 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
                 dpi=dpi,
             )
             logger.info(f"Saved {out_path.name}")
+
+    # ── Combined panel: 3 subplots (one per strategy), XGBoost vs CheMeleon bars
+    combined_dir = output_dir / "combined"
+    combined_dir.mkdir(parents=True, exist_ok=True)
+
+    active_endpoints = sorted(xgb_df["endpoint"].unique())
+    n_ep = len(active_endpoints)
+    x = np.arange(n_ep)
+    width = 0.35
+
+    fig, axes = plt.subplots(1, 3, figsize=(7 * 3, 6), sharey=True)
+
+    for ax, strategy in zip(axes, STRATEGY_ORDER):
+        for i, (model_name, agg_df) in enumerate([("xgboost", xgb_df), ("chemeleon", chemeleon_df)]):
+            means, stds = [], []
+            for ep in active_endpoints:
+                row = agg_df[(agg_df["endpoint"] == ep) & (agg_df["strategy"] == strategy)]
+                if row.empty:
+                    means.append(np.nan)
+                    stds.append(0)
+                else:
+                    means.append(row["rae_mean"].values[0])
+                    stds.append(row["rae_std"].values[0])
+
+            offset = (i - 0.5) * width
+            ax.bar(x + offset, means, width, yerr=stds,
+                   label=MODEL_LABELS.get(model_name, model_name),
+                   color=MODEL_COLORS.get(model_name, f"C{i}"),
+                   edgecolor="white", capsize=3, alpha=0.85)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(active_endpoints, rotation=45, ha="right", fontsize=8)
+        ax.set_title(f"{strategy.capitalize()} split", fontsize=14, fontweight="bold")
+        ax.axhline(y=1, color="gray", linestyle="--", alpha=0.3)
+        ax.legend(fontsize=9)
+
+    axes[0].set_ylabel("RAE")
+    fig.tight_layout()
+    fig.savefig(combined_dir / "scaffold_vs_random_rae_combined.png", dpi=dpi, bbox_inches="tight")
+    plt.close("all")
+    logger.info(f"Saved scaffold_vs_random_rae_combined.png")
 
     logger.info(f"Combined figures saved to {output_dir}")
 

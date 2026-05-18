@@ -4,7 +4,7 @@
 
 ## Summary
 
-Scaffold splits give the user no control over the distribution shift being tested — and what they produce by default is structurally leaky and nearly indistinguishable from random. Despite the Murcko scaffold carrying real, endpoint-specific biological signal (same-scaffold pairs have smaller activity differences at any given fingerprint distance), the scaffold split procedure cannot leverage this because of degenerate group sizes (67.5% singletons) and pervasive cross-scaffold structural proximity (56.4% boundary violation rate). Distance-based methods, by contrast, let the user explicitly parametrize the degree of structural novelty.
+Scaffold splits give the user no control over the distribution shift being tested — and what they produce by default is structurally leaky and nearly indistinguishable from random. The Murcko scaffold carries real, endpoint-specific biological signal — for most endpoints and most distance bins, same-scaffold pairs have smaller activity differences than different-scaffold pairs at the same fingerprint distance, though some bins reverse (notably KSOL above ~0.65). Even so, the scaffold split procedure cannot leverage this signal because of degenerate group sizes (67.5% singletons) and pervasive cross-scaffold structural proximity (56.4% boundary violation rate). Distance-based methods, by contrast, let the user explicitly parametrize the degree of structural novelty.
 
 ## Hypothesis
 
@@ -14,7 +14,7 @@ The scaffold boundary is an untunable, arbitrary discretization of continuous ch
 
 1. **Scaffold boundary violations**: For each molecule, identified the nearest neighbor overall and the nearest neighbor with a different Murcko scaffold. Computed the fraction whose overall 1-NN has a different scaffold (= boundary violation rate).
 2. **Cross-scaffold proximity**: Compared distributions of overall 1-NN, cross-scaffold 1-NN, and within-scaffold 1-NN distances.
-3. **Activity concordance**: For all ~29M molecule pairs per endpoint, binned by Tanimoto distance (width 0.05), computed mean |Δactivity| for same-scaffold vs. different-scaffold pairs. Mann-Whitney U test within each bin.
+3. **Activity concordance**: For each endpoint, formed all unique molecule pairs among molecules with measurements for that endpoint, binned by Tanimoto distance (width 0.05), and computed mean |Δactivity| for same-scaffold vs. different-scaffold pairs. Mann-Whitney U test within each bin. Pair counts vary by endpoint with coverage; see notebook for exact per-endpoint pair counts.
 
 ## Key Findings
 
@@ -22,7 +22,7 @@ The scaffold boundary is an untunable, arbitrary discretization of continuous ch
 
 ![Cross-scaffold proximity](../../../data/processed/2.16-araripe-scaffold-boundary/cross_scaffold_proximity.png)
 
-*Figure 1. Left: overall vs. cross-scaffold 1-NN distance distributions nearly overlap (medians 0.188 vs. 0.233). Center: among non-singleton molecules, within-scaffold and cross-scaffold 1-NN distributions are comparable. Right: cumulative fraction of molecules with a cross-scaffold neighbor within a given distance threshold.*
+*Figure 1. Left: overall vs. cross-scaffold 1-NN distance distributions nearly overlap (medians 0.189 vs. 0.233). Center: among non-singleton molecules, within-scaffold and cross-scaffold 1-NN distributions are comparable. Right: cumulative fraction of molecules with a cross-scaffold neighbor within a given distance threshold.*
 
 | Metric | Value |
 |--------|-------|
@@ -65,9 +65,9 @@ This endpoint-specificity is itself the problem: a scaffold split applies the *s
 
 *Figure 3. Left: scatter of within-scaffold vs. cross-scaffold 1-NN distance for non-singleton molecules — 37.2% have a closer neighbor in a different scaffold group (below diagonal). Right: fraction of same-scaffold pairs by distance bin, averaged across endpoints — same-scaffold pairs are a small minority at the distances relevant to model evaluation (>0.2).*
 
-**Scaffold split**: Fixed by the Murcko decomposition. No parameters. Produces median test-to-train 1-NN of ~0.25 (NB 2.11), yielding MA-RAE 0.510 — barely worse than random (0.473).
+**Scaffold split**: Fixed by the Murcko decomposition. No parameters. Produces median test-to-train 1-NN of ~0.25 (NB 2.11), yielding MA-RAE 0.508 — barely worse than random (0.474).
 
-**Distance-based split**: The user controls cluster cutoff, number of clusters, minimum test-to-train distance. Cluster-based splitting produces median 1-NN of ~0.42 and MA-RAE 0.672 (NB 2.11, mean across 9 endpoints from `aggregated_metrics.csv`). The degree of structural novelty is explicitly parametrized and can be matched to the deployment scenario.
+**Distance-based split**: The user controls cluster cutoff, number of clusters, minimum test-to-train distance. Cluster-based splitting produces median 1-NN of ~0.42 and MA-RAE 0.674 (NB 2.11, mean across 9 endpoints from `aggregated_metrics.csv`). The degree of structural novelty is explicitly parametrized and can be matched to the deployment scenario.
 
 ## Interpretation
 

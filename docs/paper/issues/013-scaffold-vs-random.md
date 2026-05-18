@@ -21,8 +21,8 @@ Naive Bemis-Murcko scaffold splits produce nearly identical XGBoost performance 
 | Strategy | MA-RAE |
 |----------|--------|
 | Random | 0.474 |
-| Scaffold | 0.510 |
-| Cluster | 0.672 |
+| Scaffold | 0.508 |
+| Cluster | 0.674 |
 
 Scaffold and random splits produce similar metrics across all endpoints. Cluster-based splitting consistently produces worse performance — higher MAE, higher RAE, lower R², lower rank correlations — reflecting genuine distribution shift.
 
@@ -30,31 +30,31 @@ Scaffold and random splits produce similar metrics across all endpoints. Cluster
 
 | Endpoint | Scaffold | Random | Cluster |
 |----------|----------|--------|---------|
-| LogD | 0.376 | 0.350 | 0.504 |
-| KSOL | 0.557 | 0.529 | 0.705 |
-| HLM CLint | 0.640 | 0.589 | 0.827 |
-| MLM CLint | 0.584 | 0.548 | 0.739 |
-| Caco-2 Papp A>B | 0.522 | 0.492 | 0.686 |
-| Caco-2 Efflux | 0.455 | 0.436 | 0.614 |
-| MPPB | 0.515 | 0.463 | 0.650 |
-| MBPB | 0.436 | 0.399 | 0.594 |
-| MGMB | 0.502 | 0.456 | 0.726 |
+| LogD | 0.377 | 0.350 | 0.503 |
+| KSOL | 0.556 | 0.528 | 0.700 |
+| HLM CLint | 0.640 | 0.589 | 0.826 |
+| MLM CLint | 0.585 | 0.546 | 0.748 |
+| Caco-2 Papp A>B | 0.519 | 0.495 | 0.694 |
+| Caco-2 Efflux | 0.454 | 0.434 | 0.620 |
+| MPPB | 0.514 | 0.461 | 0.648 |
+| MBPB | 0.432 | 0.403 | 0.590 |
+| MGMB | 0.492 | 0.462 | 0.734 |
 
-Scaffold–random RAE differences are 0.02–0.06 (small). Cluster–random differences are 0.13–0.27 (large, consistent).
+Scaffold–random RAE differences are 0.02–0.07 (small). Cluster–random differences are 0.13–0.27 (large, consistent).
 
 ### Per-endpoint R² (mean across folds)
 
 | Endpoint | Scaffold | Random | Cluster |
 |----------|----------|--------|---------|
-| LogD | 0.841 | 0.859 | 0.719 |
-| KSOL | 0.603 | 0.637 | 0.429 |
-| HLM CLint | 0.552 | 0.608 | 0.254 |
-| MLM CLint | 0.634 | 0.673 | 0.409 |
-| Caco-2 Papp A>B | 0.662 | 0.692 | 0.456 |
-| Caco-2 Efflux | 0.727 | 0.746 | 0.537 |
-| MPPB | 0.686 | 0.740 | 0.545 |
-| MBPB | 0.749 | 0.783 | 0.595 |
-| MGMB | 0.649 | 0.705 | 0.347 |
+| LogD | 0.839 | 0.859 | 0.720 |
+| KSOL | 0.603 | 0.639 | 0.438 |
+| HLM CLint | 0.552 | 0.610 | 0.252 |
+| MLM CLint | 0.636 | 0.674 | 0.397 |
+| Caco-2 Papp A>B | 0.664 | 0.689 | 0.443 |
+| Caco-2 Efflux | 0.729 | 0.745 | 0.530 |
+| MPPB | 0.688 | 0.744 | 0.546 |
+| MBPB | 0.752 | 0.780 | 0.600 |
+| MGMB | 0.660 | 0.701 | 0.343 |
 
 ### Distance distributions
 
@@ -89,18 +89,12 @@ The cluster-based approach succeeds because it groups molecules by fingerprint s
 
 ## Plots
 
-- `data/processed/2.11-seal-scaffold-vs-random/metric_comparison.png` — Combined metric comparison (main Fig S1)
-<!-- Paste: metric_comparison.png -->
-- `data/processed/2.11-seal-scaffold-vs-random/distance_distributions.png` — Overlaid 1-NN distance histograms
-<!-- Paste: distance_distributions.png -->
-- `data/processed/2.11-seal-scaffold-vs-random/strategy_summary.png` — MA-RAE by strategy
-<!-- Paste: strategy_summary.png -->
-- `data/processed/2.11-seal-scaffold-vs-random/metric_mae.png` — MAE by endpoint
-- `data/processed/2.11-seal-scaffold-vs-random/metric_r2.png` — R² by endpoint
-- `data/processed/2.11-seal-scaffold-vs-random/metric_rae.png` — RAE by endpoint
-- `data/processed/2.11-seal-scaffold-vs-random/metric_spearman_r.png` — Spearman ρ by endpoint
-- `data/processed/2.11-seal-scaffold-vs-random/metric_kendall_tau.png` — Kendall τ by endpoint
-- `data/processed/2.11-seal-scaffold-vs-random/scaffold_group_sizes.png` — Scaffold group size distribution
+- `data/processed/2.11-seal-scaffold-vs-random/xgboost/metric_comparison.png` — combined metric comparison (main Fig S2 candidate)
+- `data/processed/2.11-seal-scaffold-vs-random/xgboost/distance_distributions.png` — overlaid 1-NN distance histograms
+- `data/processed/2.11-seal-scaffold-vs-random/xgboost/strategy_summary.png` — MA-RAE by strategy
+- `data/processed/2.11-seal-scaffold-vs-random/xgboost/metric_mae.png`, `metric_r2.png`, `metric_rae.png`, `metric_spearman_r.png`, `metric_kendall_tau.png` — per-metric panels
+- `data/processed/2.11-seal-scaffold-vs-random/scaffold_group_sizes.png` — scaffold group size distribution (representation-level, not model-specific)
+- Combined XGBoost vs CheMeleon panels: `data/processed/2.11-seal-scaffold-vs-random/combined_<strategy>_<metric>.png`
 
 ## Reproduce
 
@@ -111,3 +105,39 @@ pixi run -e cheminformatics python notebooks/2.11-seal-scaffold-vs-random.py
 ## Source
 
 `notebooks/2.11-seal-scaffold-vs-random.py`
+
+---
+
+## Update: CheMeleon foundation model (2026-05-05)
+
+Re-ran with CheMeleon (5-fold CV per strategy, fine-tuned per fold). **Trend matches XGBoost verbatim: scaffold ≈ random ≪ cluster.**
+
+### MA-RAE by strategy
+
+| Strategy | XGBoost | CheMeleon |
+|----------|---------|-----------|
+| Random | 0.474 | 0.430 |
+| Scaffold | 0.508 | 0.471 |
+| Cluster | **0.674** | **0.623** |
+
+### Per-endpoint scaffold–random and cluster–scaffold RAE gaps
+
+| Endpoint | scaf−rand XGB | scaf−rand CM | clus−scaf XGB | clus−scaf CM |
+|----------|---------------|--------------|---------------|--------------|
+| LogD | +0.027 | +0.029 | +0.126 | +0.100 |
+| KSOL | +0.028 | +0.033 | +0.144 | +0.133 |
+| HLM CLint | +0.051 | +0.036 | +0.186 | +0.190 |
+| MLM CLint | +0.038 | +0.061 | +0.163 | +0.155 |
+| Caco-2 Papp | +0.024 | +0.033 | +0.175 | +0.234 |
+| Caco-2 Efflux | +0.020 | +0.024 | +0.166 | +0.148 |
+| MPPB | +0.052 | +0.028 | +0.134 | +0.164 |
+| MBPB | +0.029 | +0.059 | +0.158 | +0.120 |
+| MGMB | +0.030 | +0.069 | +0.243 | +0.128 |
+
+Scaffold–random RAE gap remains 0.02–0.07 in both models (negligible). Cluster–scaffold gap remains 0.10–0.24 (substantial). The Murcko-boundary argument is a property of the scaffolds and the fingerprint, not the model — switching to a graph-based foundation model leaves the gap pattern intact.
+
+### Source
+
+- `data/processed/2.11-seal-scaffold-vs-random/chemeleon/aggregated_metrics.csv`
+- GitHub comment: https://github.com/srijitseal/polaris/issues/13#issuecomment-4381106421
+- Reproduce: `pixi run -e cheminformatics python notebooks/2.11-seal-scaffold-vs-random.py --model chemeleon`
