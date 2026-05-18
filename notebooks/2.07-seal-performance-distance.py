@@ -502,12 +502,13 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
             model_metrics[model] = pd.read_csv(summary_file)
 
     if len(model_metrics) == 2:
+        cluster_metrics = {m: df[df["strategy"] == "cluster"] for m, df in model_metrics.items()}
         plot_model_comparison_bars(
-            data_by_model=model_metrics,
+            data_by_model=cluster_metrics,
             endpoint_col="endpoint",
             metric_col="degradation_ratio",
             ylabel="Degradation ratio (farthest / closest bin RMSE)",
-            title="Structural-distance degradation ratio: XGBoost vs CheMeleon",
+            title="Structural-distance degradation ratio: XGBoost vs CheMeleon (cluster split)",
             output_path=combined_dir / "degradation_ratio_comparison.png",
             dpi=dpi,
         )

@@ -341,6 +341,73 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
             )
             logger.info(f"Saved {fname}_{set_label}_comparison.png")
 
+    # ── Combined IID vs OOD squared error distribution figure ─────────────
+    xgb_errors_path = output_dir / "xgboost" / "iid_vs_ood_errors.csv"
+    cm_errors_path = output_dir / "chemeleon" / "iid_vs_ood_errors.csv"
+    if xgb_errors_path.exists() and cm_errors_path.exists():
+        xgb_errors = pd.read_csv(xgb_errors_path)
+        cm_errors = pd.read_csv(cm_errors_path)
+
+        active_endpoints = sorted(xgb_errors["endpoint"].unique())
+        n_ep = len(active_endpoints)
+
+        plt.rcParams.update({"font.size": 14, "axes.labelsize": 16, "axes.titlesize": 14,
+                             "xtick.labelsize": 11, "ytick.labelsize": 11, "legend.fontsize": 12})
+
+        fig, axes = plt.subplots(1, 2, figsize=(max(12, n_ep * 2), 6), sharey=True)
+
+        for ax, (model_name, errors_df) in zip(axes, [("XGBoost", xgb_errors), ("CheMeleon", cm_errors)]):
+            positions_iid, positions_ood = [], []
+            data_iid, data_ood = [], []
+            x_ticks, x_labels = [], []
+
+            for i, ep in enumerate(active_endpoints):
+                iid_se = errors_df[(errors_df["endpoint"] == ep) & (errors_df["set"] == "iid")]["squared_error"].values
+                ood_se = errors_df[(errors_df["endpoint"] == ep) & (errors_df["set"] == "ood")]["squared_error"].values
+
+                pos_iid = i * 3
+                pos_ood = i * 3 + 1
+                positions_iid.append(pos_iid)
+                positions_ood.append(pos_ood)
+                data_iid.append(iid_se)
+                data_ood.append(ood_se)
+                x_ticks.append(i * 3 + 0.5)
+                x_labels.append(ep)
+
+                fold = np.median(ood_se) / np.median(iid_se) if np.median(iid_se) > 0 else np.nan
+                y_top = max(np.percentile(iid_se, 95), np.percentile(ood_se, 95))
+                ax.text(i * 3 + 0.5, y_top * 1.5, f"{fold:.1f}×", ha="center", va="bottom",
+                        fontsize=10, fontweight="bold", color="black")
+
+            bp_iid = ax.boxplot(data_iid, positions=positions_iid, widths=0.7, patch_artist=True,
+                                showfliers=False, medianprops={"color": "white", "linewidth": 2})
+            bp_ood = ax.boxplot(data_ood, positions=positions_ood, widths=0.7, patch_artist=True,
+                                showfliers=False, medianprops={"color": "white", "linewidth": 2})
+
+            for patch in bp_iid["boxes"]:
+                patch.set_facecolor("steelblue")
+                patch.set_alpha(0.7)
+            for patch in bp_ood["boxes"]:
+                patch.set_facecolor("coral")
+                patch.set_alpha(0.7)
+
+            ax.set_yscale("log")
+            ax.set_xticks(x_ticks)
+            ax.set_xticklabels(x_labels, rotation=35, ha="right")
+            ax.set_title(model_name, fontweight="bold")
+
+        axes[0].set_ylabel("Squared error")
+
+        from matplotlib.patches import Patch
+        axes[1].legend(handles=[Patch(facecolor="steelblue", alpha=0.7, label="IID (within-series)"),
+                                Patch(facecolor="coral", alpha=0.7, label="OOD (cross-series)")],
+                       loc="lower left")
+
+        fig.tight_layout()
+        fig.savefig(combined_dir / "squared_error_distributions_combined.png", dpi=dpi, bbox_inches="tight")
+        plt.close("all")
+        logger.info("Saved squared_error_distributions_combined.png")
+
     logger.info(f"Combined figures saved to {combined_dir}")
 
 

@@ -333,6 +333,130 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
         )
         logger.info(f"Saved {fname}.png")
 
+    # ── Combined resonance sensitivity panel (A + B + C) ───────────────────
+    xgb_metrics_path = output_dir / "xgboost" / "consistency_metrics.csv"
+    cm_metrics_path = output_dir / "chemeleon" / "consistency_metrics.csv"
+    if xgb_metrics_path.exists() and cm_metrics_path.exists():
+        import matplotlib.gridspec as gridspec
+
+        COLOR_A       = "#2F7DBF"
+        COLOR_IMPROV  = "#2D7D3A"
+        COLOR_WORSEN  = "#C0392B"
+        COLOR_BOX     = "#E07B54"
+        COLOR_STRIP   = "#7B2D1E"
+        BAR_EDGE      = "black"
+        BAR_LW        = 0.6
+
+        xgb_cons = pd.read_csv(xgb_metrics_path)
+        cm_cons = pd.read_csv(cm_metrics_path)
+
+        ep_order = xgb.sort_values("pct_swing", ascending=False)["endpoint"].tolist()
+        disp = [ENDPOINT_LABELS.get(ep, ep) for ep in ep_order]
+        xgb_met = {row["endpoint"]: row for _, row in xgb.iterrows()}
+
+        fig = plt.figure(figsize=(20, 14))
+        gs = gridspec.GridSpec(3, 2, height_ratios=[0.8, 1, 1.2], hspace=0.32, wspace=0.20)
+
+        # Row 0: Panel A — coverage (model-independent, spans full width)
+        ax_a = fig.add_subplot(gs[0, :])
+        y_pos = np.arange(len(ep_order))
+        coverages = [xgb_met[ep]["coverage_pct"] for ep in ep_order]
+        ax_a.barh(y_pos, coverages, color=COLOR_A, height=0.6,
+                  edgecolor=BAR_EDGE, linewidth=BAR_LW)
+        for i, ep in enumerate(ep_order):
+            cov = xgb_met[ep]["coverage_pct"]
+            n_m = int(xgb_met[ep]["n_multi"])
+            n_t = int(xgb_met[ep]["n_total"])
+            ax_a.text(cov + 0.8, i, f"{cov:.1f}%  ({n_m}/{n_t})", va="center", fontsize=10,
+                      color="dimgray", clip_on=False)
+        ax_a.set_yticks(y_pos)
+        ax_a.set_yticklabels(disp, fontsize=10)
+        ax_a.set_xlabel("Molecules with multiple resonance forms (%)", fontsize=10)
+        ax_a.set_xlim(0, max(coverages) * 1.35)
+        ax_a.set_title("A", fontsize=16, fontweight="bold", loc="left")
+        ax_a.invert_yaxis()
+        ax_a.grid(False)
+        for spine in ["top", "right"]:
+            ax_a.spines[spine].set_visible(False)
+
+        # Rows 1–2: B (diverging bars) and C (boxplots), side-by-side per model
+        for col, (model_label, summary, cons_df) in enumerate([
+            ("XGBoost", xgb, xgb_cons),
+            ("CheMeleon", chemeleon, cm_cons),
+        ]):
+            ep_met = {row["endpoint"]: row for _, row in summary.iterrows()}
+            y_pos = np.arange(len(ep_order))
+
+            ax_b = fig.add_subplot(gs[1, col])
+            improves_neg = [-ep_met[ep]["improve_pct"] for ep in ep_order]
+            worsens      = [ ep_met[ep]["worsen_pct"]  for ep in ep_order]
+
+            ax_b.barh(y_pos, improves_neg, color=COLOR_IMPROV, height=0.6,
+                      edgecolor=BAR_EDGE, linewidth=BAR_LW, label="Best case")
+            ax_b.barh(y_pos, worsens,      color=COLOR_WORSEN, height=0.6,
+                      edgecolor=BAR_EDGE, linewidth=BAR_LW, label="Worst case")
+
+            max_improve = max(abs(v) for v in improves_neg)
+            max_worsen  = max(worsens)
+            ax_b.set_xlim(-max_improve * 1.9, max_worsen * 1.35)
+
+            for i, (imp, wor) in enumerate(zip(improves_neg, worsens)):
+                ax_b.text(imp - 0.2, i, f"{abs(imp):.1f}%", va="center", ha="right",
+                          fontsize=9, color=COLOR_IMPROV, clip_on=False)
+                ax_b.text(wor + 0.2, i, f"{wor:.1f}%", va="center", ha="left",
+                          fontsize=9, color=COLOR_WORSEN, clip_on=False)
+
+            ax_b.axvline(0, color="black", linewidth=1.0)
+            ax_b.set_yticks(y_pos)
+            ax_b.set_yticklabels(disp if col == 0 else [""] * len(ep_order), fontsize=10)
+            ax_b.set_xlabel("Overall RMSE change (% of baseline)", fontsize=10)
+            ax_b.set_title(f"B — {model_label}", fontsize=14, fontweight="bold")
+            if col == 0:
+                ax_b.legend(loc="lower right", fontsize=8, framealpha=0.95, edgecolor="lightgray")
+            ax_b.invert_yaxis()
+            ax_b.grid(False)
+            for spine in ["top", "right"]:
+                ax_b.spines[spine].set_visible(False)
+
+            ax_c = fig.add_subplot(gs[2, col])
+            plot_df = cons_df.copy()
+            plot_df["endpoint_label"] = plot_df["endpoint"].map(lambda e: ENDPOINT_LABELS.get(e, e))
+            disp_order = [ENDPOINT_LABELS.get(ep, ep) for ep in ep_order]
+
+            sns.boxplot(
+                data=plot_df, x="endpoint_label", y="mol_pct_swing",
+                order=disp_order, color=COLOR_BOX, width=0.5, showfliers=False,
+                boxprops=dict(edgecolor=BAR_EDGE, linewidth=BAR_LW),
+                medianprops=dict(color=BAR_EDGE, linewidth=1.2),
+                whiskerprops=dict(color=BAR_EDGE, linewidth=BAR_LW),
+                capprops=dict(color=BAR_EDGE, linewidth=BAR_LW),
+                ax=ax_c,
+            )
+            strip_data = pd.concat([
+                g.sample(min(len(g), 200), random_state=42)
+                for _, g in plot_df.groupby("endpoint_label")
+            ], ignore_index=True)
+            sns.stripplot(
+                data=strip_data, x="endpoint_label", y="mol_pct_swing",
+                order=disp_order, color=COLOR_STRIP, size=2.5, alpha=0.5,
+                jitter=True, ax=ax_c,
+            )
+
+            p95 = cons_df["mol_pct_swing"].quantile(0.95)
+            ax_c.set_ylim(bottom=-p95 * 0.04, top=p95 * 1.3)
+            ax_c.set_xlabel("")
+            ax_c.set_ylabel("Error range across resonance forms\n(% of baseline)" if col == 0 else "", fontsize=10)
+            ax_c.set_title(f"C — {model_label}", fontsize=14, fontweight="bold")
+            ax_c.set_xticklabels(disp_order, rotation=30, ha="right", fontsize=9)
+            ax_c.yaxis.grid(True, linestyle="--", linewidth=0.6, alpha=0.5, color="lightgray")
+            ax_c.set_axisbelow(True)
+            for spine in ["top", "right"]:
+                ax_c.spines[spine].set_visible(False)
+
+        fig.savefig(combined_dir / "resonance_sensitivity_panel_combined.png", dpi=dpi, bbox_inches="tight")
+        plt.close()
+        logger.info("Saved resonance_sensitivity_panel_combined.png")
+
     logger.info(f"Combined figures saved to {combined_dir}")
 
 
