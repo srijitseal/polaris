@@ -2,7 +2,7 @@
 
 ## Summary
 
-Random 5-fold CV is highly reproducible (RAE std 0.002–0.012 across 5 repeats), but this tightness is a **structural artefact** of sampling design: each fold is an unbiased draw from the same joint distribution over chemistry and labels, so different seeds produce near-identical train/test marginals and near-identical error estimates. Cluster-based CV deliberately breaks this symmetry by sampling disjoint structural groups (RAE std 0.007–0.064) at a substantially harder performance level (MA-RAE ~0.67 vs ~0.47). The cluster/random std ratio varies per endpoint from 0.56× (KSOL, where cluster is tighter) to 14× (Caco-2 Efflux), median ~5× — "cluster is always noisier than random" is not uniformly true. The invariant is that the between-strategy MA-RAE gap (~0.20) dwarfs within-strategy spread by ~10×. The practical consequence: the choice of splitting strategy changes the reported answer far more than the number of repeats, and random CV's reproducibility should not be read as deployment confidence.
+Random 5-fold CV is highly reproducible (RAE std 0.003–0.012 across 5 repeats), but this tightness is a **structural artefact** of sampling design: each fold is an unbiased draw from the same joint distribution over chemistry and labels, so different seeds produce near-identical train/test marginals and near-identical error estimates. Cluster-based CV deliberately breaks this symmetry by sampling disjoint structural groups (RAE std 0.007–0.059) at a substantially harder performance level (MA-RAE ~0.67 vs ~0.47). The cluster/random std ratio varies per endpoint from 0.6× (KSOL, where cluster is tighter) to 13.5× (Caco-2 Efflux), median 3.5× — "cluster is always noisier than random" is not uniformly true. The invariant is that the between-strategy MA-RAE gap (~0.20) dwarfs within-strategy spread: relative to the pooled per-endpoint repeat std, the gap is ~33× the random-CV spread and ~7× the cluster-CV spread under XGBoost. The practical consequence: the choice of splitting strategy changes the reported answer far more than the number of repeats, and random CV's reproducibility should not be read as deployment confidence.
 
 ## Method
 
@@ -92,7 +92,7 @@ The results reveal a subtlety beyond "single splits are noisy." Random CV is *no
 
 1. **Random CV's reproducibility is structural, not informative.** By construction, random sampling produces folds with near-identical marginals over both the chemistry (domain) and the labels (co-domain). Each fold is an unbiased draw from the same joint, so different seeds produce near-identical metrics. Cluster and series-based splits deliberately bias the distribution in the held-out set (along chemical space and label space respectively), so different seeds produce qualitatively different "hard" subsets. This is a consequence of sampling design and should not be surprising.
 
-2. **The consequence is not obvious.** Practitioners routinely report tight random-CV confidence intervals as evidence of reliable performance estimation. Concretely, random CV delivers precise estimates (MA-RAE ~0.47, std ~0.003) of a quantity — performance on near-duplicates that leak across fold boundaries — that does not correspond to deployment. The between-strategy MA-RAE gap (~0.20) is roughly 8× the within-cluster std and ~50× the within-random std, so picking random over cluster changes the reported answer far more than running more repeats does. A single cluster-split can report R²=0.32 or R²=0.58 for MGMB — only the mean across repeats (0.48) with its CI gives the full story.
+2. **The consequence is not obvious.** Practitioners routinely report tight random-CV confidence intervals as evidence of reliable performance estimation. Concretely, random CV delivers precise estimates (MA-RAE ~0.47, std ~0.003 across aggregate repeats) of a quantity — performance on near-duplicates that leak across fold boundaries — that does not correspond to deployment. Relative to the pooled per-endpoint repeat std, the between-strategy MA-RAE gap (~0.20) is roughly 33× the within-random spread and 7× the within-cluster spread, so picking random over cluster changes the reported answer far more than running more repeats does. A single cluster-split can report R²=0.32 or R²=0.58 for MGMB — only the mean across repeats (0.48) with its CI gives the full story.
 
 The practical takeaways:
 
@@ -140,10 +140,10 @@ For all 9 endpoints, **U = 25, p = 0.0079** in both XGBoost and CheMeleon — th
 | MA-RAE random | 0.472 | 0.430 |
 | MA-RAE cluster | 0.669 | 0.622 |
 | Gap | **0.197** | **0.192** |
-| Median within-random std | 0.004 | 0.005 |
-| Median within-cluster std | 0.025 | 0.020 |
-| Gap / within-random std | 48× | 41× |
-| Gap / within-cluster std | 8.0× | 9.6× |
+| Pooled within-random std | 0.006 | 0.007 |
+| Pooled within-cluster std | 0.029 | 0.027 |
+| Gap / within-random std | 33× | 29× |
+| Gap / within-cluster std | 7× | 7× |
 
 ### Per-endpoint cluster/random std ratio
 

@@ -115,6 +115,11 @@ data/
 # Manuscript outputs
 docs/paper/manuscript.md
 docs/paper/manuscript.docx
+docs/paper/manuscript_from_md.*
+docs/paper/manuscript_v*.docx
+docs/paper/~$*
+scripts/build_manuscript_docx.sh
+scripts/postprocess_manuscript_docx.py
 
 # Misc
 .direnv
