@@ -42,3 +42,9 @@ Status tracking for all planned analyses. This is the source of truth for analys
 | Status | Notebook | Description |
 |--------|----------|-------------|
 | TODO | `3.01-seal-paper-figures.py` | Publication figures: assemble all main (Fig 1–7) and supplementary (Fig S1–S8) at publication quality from the per-model `xgboost/` outputs. Plus Fig S9: per-notebook `combined/` panels showing XGBoost vs CheMeleon side by side. Sources: Fig 1 (NB 0.02), Fig 2 (NB 2.01), Fig 3 (NB 2.06), Fig 4 (NB 2.07/xgboost), Fig 5 (NB 2.09/xgboost), Fig 6 (NB 2.13/xgboost), Fig 7 (NB 2.15/xgboost), Fig S1 (NB 2.08/xgboost), Fig S2 (NB 2.11/xgboost), Fig S3 (NB 2.12/xgboost), Fig S4 (NB 2.10/xgboost), Fig S5–S6 (NB 2.13/xgboost), Fig S7 (NB 2.16), Fig S8 (NB 2.15), Fig S9 (combined/ across modeling notebooks) |
+
+## Phase 4: Result Browsing
+
+| Status | Notebook | Description |
+|--------|----------|-------------|
+| DONE | `4.01-seal-results-dashboard.py` | Streamlit dashboard that recursively inventories `data/processed/` and displays every non-system result file as a figure, table/parquet preview, text/markdown/JSON block, NPZ summary, or NPY cache-array metadata. Includes an audit tab that flags unsupported file types so newly added outputs cannot be silently missed. |

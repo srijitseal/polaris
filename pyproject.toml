@@ -21,6 +21,7 @@ dependencies = [
     "optuna>=3.0",
     "chembl-downloader>=0.5.2",
     "requests>=2.31",
+    "streamlit>=1.40",
 ]
 
 [build-system]
