@@ -34,3 +34,16 @@ done
 
 echo "Done. Files saved to ${OUT_DIR}/"
 ls -lh "${OUT_DIR}"/*.csv
+
+# Biogen ADME public set (Fang et al. 2023, JCIM) — external comparison dataset
+# for the cross-dataset characterization case study (notebooks/4.01).
+EXT_DIR="$(dirname "$0")/../data/external"
+BIOGEN_FILE="biogen_adme_public_set_3521.csv"
+BIOGEN_URL="https://raw.githubusercontent.com/molecularinformatics/Computational-ADME/main/ADME_public_set_3521.csv"
+mkdir -p "$EXT_DIR"
+if [[ -f "${EXT_DIR}/${BIOGEN_FILE}" ]]; then
+    echo "Already exists: ${BIOGEN_FILE}"
+else
+    echo "Downloading ${BIOGEN_FILE}..."
+    curl -L -o "${EXT_DIR}/${BIOGEN_FILE}" "$BIOGEN_URL"
+fi

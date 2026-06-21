@@ -20,6 +20,8 @@ Outputs:
     data/processed/2.06-seal-split-quality/extrapolation_regimes.png
     data/processed/2.06-seal-split-quality/extrapolation_regimes.csv
     data/processed/2.06-seal-split-quality/label_drift_and_regimes_combined.png
+    data/processed/2.06-seal-split-quality/adversarial_validation.png
+    data/processed/2.06-seal-split-quality/adversarial_validation.csv
 """
 
 from pathlib import Path
@@ -31,8 +33,12 @@ import seaborn as sns
 import typer
 import umap
 from loguru import logger
+from rdkit import Chem
+from rdkit.Chem import AllChem
 from scipy import stats
 from scipy.spatial.distance import squareform
+from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.model_selection import StratifiedKFold, cross_val_score
 
 from polaris_generalization.config import INTERIM_DATA_DIR, PROCESSED_DATA_DIR
 from polaris_generalization.visualization import DEFAULT_DPI, set_style
@@ -359,6 +365,82 @@ def plot_combined_si_figure(
     plt.close("all")
 
 
+def ecfp4_matrix(smiles: list[str], nbits: int = 2048, radius: int = 2) -> np.ndarray:
+    """Dense ECFP4 bit matrix (chirality-aware), zero row for unparseable SMILES."""
+    rows = []
+    for smi in smiles:
+        mol = Chem.MolFromSmiles(smi) if isinstance(smi, str) else None
+        arr = np.zeros(nbits, dtype=np.float32)
+        if mol is not None:
+            fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius, nBits=nbits, useChirality=True)
+            arr[list(fp.GetOnBits())] = 1.0
+        rows.append(arr)
+    return np.vstack(rows)
+
+
+def adversarial_validation_by_strategy(
+    df: pd.DataFrame, strategies: dict, colors: dict, output_dir: Path, dpi: int
+) -> pd.DataFrame:
+    """Covariate-shift comparison of split strategies via adversarial validation.
+
+    For each strategy and fold, a classifier (ECFP4 features) is trained to tell
+    test molecules from their training set; the cross-validated AUROC measures how
+    separable they are. AUROC near 0.5 means no covariate shift (random-like);
+    near 1.0 means the test set is structurally out-of-distribution. A random
+    split is included as the 0.5 anchor. This complements the KS label-shift
+    diagnostic: together they separate covariate shift from label shift.
+    """
+    mask = df[ENDPOINT].notna().values
+    logger.info(f"Adversarial validation on {int(mask.sum())} {ENDPOINT} molecules (ECFP4)")
+    X = ecfp4_matrix(df.loc[mask, "SMILES"].tolist())
+
+    rng = np.random.default_rng(42)
+    rand_folds = rng.integers(0, 5, size=X.shape[0])
+
+    # (label, fold_ids, train/test convention): random and cluster hold out a
+    # fold against all others; time/target use the expanding-window convention.
+    tasks = [(name, strat["fold_ids"], name) for name, strat in strategies.items()]
+    tasks.append(("random", rand_folds, "cluster"))
+
+    cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=0)
+    rows = []
+    for label, fold_ids, convention in tasks:
+        n_folds = int(max(f for f in fold_ids if f >= 0)) + 1
+        fold_aurocs = []
+        for k in range(n_folds):
+            train_mask, test_mask = get_train_test_masks(fold_ids, k, convention)
+            if train_mask.sum() < 20 or test_mask.sum() < 20:
+                continue
+            sub = train_mask | test_mask
+            y_adv = test_mask[sub].astype(int)
+            clf = HistGradientBoostingClassifier(max_iter=60, random_state=0)
+            auroc = cross_val_score(clf, X[sub], y_adv, scoring="roc_auc", cv=cv).mean()
+            fold_aurocs.append(float(auroc))
+        rows.append({"strategy": label, "mean_auroc": float(np.mean(fold_aurocs)),
+                     "n_folds": len(fold_aurocs)})
+    adv_df = pd.DataFrame(rows).sort_values("mean_auroc").reset_index(drop=True)
+
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    bar_colors = [colors.get(s, "gray") for s in adv_df["strategy"]]
+    ax.bar(np.arange(len(adv_df)), adv_df["mean_auroc"], color=bar_colors, edgecolor="white")
+    ax.axhline(0.5, color="0.4", linestyle="--", linewidth=1.2, label="no shift (0.5)")
+    ax.set_xticks(np.arange(len(adv_df)))
+    ax.set_xticklabels(adv_df["strategy"])
+    ax.set_ylabel("Adversarial-validation AUROC\n(test-vs-train separability)")
+    ax.set_ylim(0.4, 1.0)
+    for i, v in enumerate(adv_df["mean_auroc"]):
+        ax.annotate(f"{v:.2f}", (i, v), ha="center", va="bottom", fontsize=9)
+    ax.legend(frameon=True)
+    fig.tight_layout()
+    fig.savefig(output_dir / "adversarial_validation.png", dpi=dpi, bbox_inches="tight")
+    adv_df.to_csv(output_dir / "adversarial_validation.csv", index=False)
+    logger.info("Saved adversarial_validation.png / .csv")
+    for _, r in adv_df.iterrows():
+        logger.info(f"  {r['strategy']}: AUROC={r['mean_auroc']:.3f} ({r['n_folds']} folds)")
+    plt.close("all")
+    return adv_df
+
+
 @app.command()
 def main(
     output_dir: Path = typer.Option(
@@ -621,6 +703,10 @@ def main(
     # ── 10. Combined SI figure (drift on top, regimes on bottom) ──────
     logger.info("Building combined SI figure")
     plot_combined_si_figure(drift_df, panel_windows, a_df, b_df, colors, output_dir, dpi)
+
+    # ── 11. Adversarial validation: covariate shift per strategy ──────
+    logger.info("Running adversarial validation across strategies")
+    adversarial_validation_by_strategy(df, strategies, colors, output_dir, dpi)
 
     logger.info(f"All outputs saved to {output_dir}")
 

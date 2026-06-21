@@ -82,6 +82,18 @@ This paper sits between a review and an opinion paper. Instead of prescriptive "
 
 **Figures**: Figure 2 (cluster size distribution)
 
+### 2b. Cross-dataset characterization: the right split is a property of the dataset (NB 4.01, SI)
+
+**Claim** (Wognum review): dataset characterization, not protocol, dictates which splits are even constructible — you cannot apply the same evaluation blindly to every dataset.
+
+**Content**: same representation (ECFP4, Tanimoto, Butina cutoff 0.7) applied to the public Biogen ADME dataset (Fang et al. 2023, n=3,521) vs ExpansionRx:
+- ExpansionRx concentrates into a few series (largest Butina cluster 33.8%, top-10 84%, 135 clusters); Biogen is diffuse (largest 2.1%, top-10 14%, 1,169 clusters, 54% singletons)
+- Intra-set median 1-NN distance: ExpansionRx 0.19 vs Biogen 0.55 (structurally scattered)
+- Random-split median test-to-train distance: ExpansionRx 0.20 vs Biogen 0.57 — in Biogen a random split is already as hard as a deliberate one, and a series-based IID/OOD split is not constructible
+- Take-home: split choice must follow characterization; characterization is a feasibility check, not a formality
+
+**Figures**: SI cross-dataset figure (cluster concentration; intra-set 1-NN; random-split distance)
+
 ### 3. Deployment-matched splits probe complementary generalization axes
 
 **Claim**: Splitting strategies should be motivated by the distribution shift encountered in real-world deployment scenarios, and must be compatible with cross-validation. No single split captures all deployment realities.
@@ -107,7 +119,12 @@ This paper sits between a review and an opinion paper. Instead of prescriptive "
 
 All strategies produced balanced fold sizes (max/min ratio < 1.15). Distance distributions illustrated for LogD as representative endpoint.
 
-**Figures**: Figure 3 (test-to-train 1-NN distance distributions by strategy)
+#### 3d. Verifying the intended shift (split diagnostics, NB 2.06)
+- **Temporal label drift** (Engkvist review): per-assay value distributions drift over time-split windows in 8 of 9 assays (Spearman trend, p<0.05 and |ρ|≥0.10); strongest for Caco-2 permeability, KSOL, and MLM CLint; only MBPB stable. Direction is assay-specific (LogD/clearance down, solubility/efflux up), not uniform optimization.
+- **Covariate vs label shift are distinct axes** (Rodríguez review): the time split shifts values within the already-seen range (≤0.9% of test molecules beyond the training range in every assay), whereas only the target-value split produces genuine value extrapolation (91.5% of LogD test molecules beyond range).
+- **Adversarial validation** (ECFP4 classifier AUROC, model-based covariate-shift criterion): random 0.51 (anchor), target 0.86, time 0.98, cluster 1.00. Read with the KS label-shift (cluster 0.06–0.17, time 0.06–0.27, target 0.96–0.99), this decomposes covariate shift (cluster/time) from label shift (target).
+
+**Figures**: Figure 3 (test-to-train 1-NN distance distributions by strategy); SI label-drift + extrapolation-regime figure; SI adversarial-validation AUROC bar chart
 
 ### 4. Failure mode 1: performance degrades with structural distance and target-value extrapolation
 
@@ -175,6 +192,7 @@ Both models show the same strategy ranking. CheMeleon achieves ~7% lower MA-RAE 
 - KSOL (6.5× XGB, 46.9× CM): solubility depends on crystal packing forces, highly scaffold-dependent; CheMeleon's better IID fit exacerbates overconfident extrapolation
 - MLM CLint (6.4× XGB, 8.1× CM): CYP450 metabolic soft-spot accessibility is scaffold-dependent; both models overfit to training series SAR
 - LogD (5.1× XGB, 4.4× CM): CheMeleon captures global lipophilicity patterns that partially transfer across scaffolds — the exception that proves the rule
+- LogD amine-pKa diagnostic (NB 2.09): the OOD series is 85% amino-pyridine vs 97% aliphatic amine in IID; the model over-predicts OOD LogD by a systematic 0.4–1.5 log units (vs +0.09 IID bias), not random scatter, consistent with an amine ionization/pKa-regime shift the IID-trained model cannot transfer (LogD depends on fraction ionized at assay pH). The OOD R² collapse (0.645→0.05) is not a variance artifact — OOD variance is *higher* — but a genuine ~2.2× RMSE increase
 
 **Figures**: Figure 5 (IID vs OOD RAE comparison, both models), Table 3 (IID vs OOD metrics: R², Spearman, SE fold-change for both XGBoost and CheMeleon)
 
