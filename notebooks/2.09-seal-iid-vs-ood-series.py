@@ -24,6 +24,9 @@ Outputs (per model):
     data/processed/2.09-seal-iid-vs-ood-series/{model}/spearman_by_endpoint.png
     data/processed/2.09-seal-iid-vs-ood-series/{model}/kendall_by_endpoint.png
     data/processed/2.09-seal-iid-vs-ood-series/{model}/rae_by_endpoint.png
+    data/processed/2.09-seal-iid-vs-ood-series/{model}/amine_pka_logd.png
+    data/processed/2.09-seal-iid-vs-ood-series/{model}/amine_pka_logd_composition.csv
+    data/processed/2.09-seal-iid-vs-ood-series/{model}/amine_pka_logd_bias.csv
 
 Model-agnostic outputs:
     data/processed/2.09-seal-iid-vs-ood-series/split_summary.csv
@@ -81,6 +84,15 @@ ENDPOINT_PH = {
 
 DESCRIPTOR_NAMES = [name for name, _ in Descriptors.descList]
 DESC_CALC = MolecularDescriptorCalculator(DESCRIPTOR_NAMES)
+
+# Amine SMARTS for the LogD ionization diagnostic. Aliphatic amines (pKaH ~9-10)
+# are protonated at assay pH 7.4; amino-pyridines (pKaH ~6.6) are largely neutral,
+# so series that differ in amine type ionize differently and their LogD shifts.
+AMINE_SMARTS = {
+    "aliphatic_amine": "[NX3;!$(NC=O);!$(N=*);!$([N+]);!$(Nc);!$(na);!$([nX3])]",
+    "aromatic_amine": "[NX3;!$(NC=O);!$(N=*)]c",
+    "aminopyridine": "[NX3;!$(NC=O)]c1ccncc1",
+}
 
 
 def clip_and_log_transform(x: np.ndarray) -> np.ndarray:
@@ -221,6 +233,91 @@ def _migrate_flat_outputs(output_dir: Path) -> None:
         logger.info(f"Migrated {len(migrated)} existing files → xgboost/")
 
 
+def analyze_amine_pka_logd(errors_df: pd.DataFrame, model_dir: Path, dpi: int) -> None:
+    """LogD amine-ionization diagnostic for the IID vs OOD series.
+
+    The OOD series is dominated by weakly basic amino-pyridines while the IID
+    series is mostly strongly basic aliphatic amines. Because LogD depends on the
+    fraction ionized at assay pH (7.4), an IID-trained model systematically
+    misplaces the differently ionized OOD series. This characterizes the amine
+    composition of each series and the resulting signed LogD prediction bias by
+    amine type, to back the mechanistic (pKa) reading of the LogD OOD failure.
+    """
+    logd = errors_df[errors_df["endpoint"] == "LogD"]
+    if logd.empty or not {"iid", "ood"}.issubset(set(logd["set"])):
+        logger.warning("No LogD IID/OOD predictions found; skipping amine-pKa diagnostic")
+        return
+
+    smiles = pd.read_parquet(INTERIM_DATA_DIR / "expansion_tx.parquet")[["Molecule Name", "SMILES"]]
+    logd = logd.merge(smiles, on="Molecule Name", how="left").reset_index(drop=True)
+
+    patts = {k: Chem.MolFromSmarts(s) for k, s in AMINE_SMARTS.items()}
+
+    def motif_flags(sm: str) -> pd.Series:
+        mol = Chem.MolFromSmiles(sm) if isinstance(sm, str) else None
+        return pd.Series({k: bool(mol and mol.HasSubstructMatch(p)) for k, p in patts.items()})
+
+    logd = pd.concat([logd, logd["SMILES"].apply(motif_flags)], axis=1)
+    logd["signed"] = logd["y_true"] - logd["y_pred"]  # negative => model over-predicts LogD
+
+    iid = logd[logd["set"] == "iid"]
+    ood = logd[logd["set"] == "ood"]
+
+    comp_rows = []
+    for label, grp in [("IID series", iid), ("OOD series", ood)]:
+        for k in patts:
+            comp_rows.append({"series": label, "motif": k, "prevalence": float(grp[k].mean()), "n": len(grp)})
+    comp_df = pd.DataFrame(comp_rows)
+
+    arom_nonpyr = ood["aromatic_amine"] & ~ood["aminopyridine"]
+    bias_df = pd.DataFrame([
+        {"group": "IID (all)", "bias": float(iid["signed"].mean()), "n": len(iid)},
+        {"group": "OOD amino-pyridine", "bias": float(ood.loc[ood["aminopyridine"], "signed"].mean()),
+         "n": int(ood["aminopyridine"].sum())},
+        {"group": "OOD aromatic amine\n(non-pyridine)", "bias": float(ood.loc[arom_nonpyr, "signed"].mean()),
+         "n": int(arom_nonpyr.sum())},
+        {"group": "OOD aliphatic amine", "bias": float(ood.loc[ood["aliphatic_amine"], "signed"].mean()),
+         "n": int(ood["aliphatic_amine"].sum())},
+    ])
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5.2))
+    motifs = list(patts)
+    x = np.arange(len(motifs))
+    width = 0.38
+    for i, (label, color) in enumerate([("IID series", "steelblue"), ("OOD series", "coral")]):
+        vals = [comp_df[(comp_df["series"] == label) & (comp_df["motif"] == m)]["prevalence"].iloc[0] * 100
+                for m in motifs]
+        axes[0].bar(x + (i - 0.5) * width, vals, width, label=label, color=color, edgecolor="white")
+    axes[0].set_xticks(x)
+    axes[0].set_xticklabels([m.replace("_", "\n") for m in motifs])
+    axes[0].set_ylabel("% of LogD-assayed molecules")
+    axes[0].set_ylim(0, 100)
+    axes[0].legend(frameon=True)
+    axes[0].set_title("Amine composition: IID vs OOD series", fontsize=11)
+
+    bar_colors = ["steelblue", "coral", "coral", "coral"]
+    axes[1].bar(np.arange(len(bias_df)), bias_df["bias"], color=bar_colors, edgecolor="white")
+    axes[1].axhline(0, color="0.4", lw=1)
+    axes[1].set_xticks(np.arange(len(bias_df)))
+    axes[1].set_xticklabels(bias_df["group"], fontsize=8)
+    axes[1].set_ylabel("Mean signed LogD residual (true − pred)\n(negative = model over-predicts)")
+    for i, r in bias_df.iterrows():
+        axes[1].annotate(f"n={r['n']}", (i, r["bias"]), ha="center",
+                         va="bottom" if r["bias"] >= 0 else "top", fontsize=8)
+    axes[1].set_title("LogD bias by amine type", fontsize=11)
+
+    fig.tight_layout()
+    fig.savefig(model_dir / "amine_pka_logd.png", dpi=dpi, bbox_inches="tight")
+    comp_df.to_csv(model_dir / "amine_pka_logd_composition.csv", index=False)
+    bias_df.to_csv(model_dir / "amine_pka_logd_bias.csv", index=False)
+    logger.info("Saved amine_pka_logd.png / _composition.csv / _bias.csv")
+    for _, r in comp_df.iterrows():
+        logger.info(f"  {r['series']} {r['motif']}: {r['prevalence']:.1%} (n={r['n']})")
+    for _, r in bias_df.iterrows():
+        logger.info(f"  bias [{r['group'].replace(chr(10), ' ')}]: {r['bias']:+.3f} (n={r['n']})")
+    plt.close("all")
+
+
 def _generate_figures(errors_df: pd.DataFrame, metrics_df: pd.DataFrame,
                       model_dir: Path, dpi: int) -> None:
     """Generate all per-model figures."""
@@ -228,6 +325,7 @@ def _generate_figures(errors_df: pd.DataFrame, metrics_df: pd.DataFrame,
     n_ep = len(active_endpoints)
 
     plot_squared_error_distributions(errors_df, metrics_df, model_dir, dpi)
+    analyze_amine_pka_logd(errors_df, model_dir, dpi)
 
     # Figure A: Squared error distributions (3×3 grid)
     nrows = (n_ep + 2) // 3

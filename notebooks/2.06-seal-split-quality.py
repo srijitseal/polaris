@@ -15,6 +15,13 @@ Outputs:
     data/processed/2.06-seal-split-quality/structural_overlap.png
     data/processed/2.06-seal-split-quality/umap_by_strategy.png
     data/processed/2.06-seal-split-quality/split_quality_summary.csv
+    data/processed/2.06-seal-split-quality/label_drift_over_time.png
+    data/processed/2.06-seal-split-quality/label_drift_over_time.csv
+    data/processed/2.06-seal-split-quality/extrapolation_regimes.png
+    data/processed/2.06-seal-split-quality/extrapolation_regimes.csv
+    data/processed/2.06-seal-split-quality/label_drift_and_regimes_combined.png
+    data/processed/2.06-seal-split-quality/adversarial_validation.png
+    data/processed/2.06-seal-split-quality/adversarial_validation.csv
 """
 
 from pathlib import Path
@@ -22,11 +29,16 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import seaborn as sns
 import typer
 import umap
 from loguru import logger
+from rdkit import Chem
+from rdkit.Chem import AllChem
 from scipy import stats
 from scipy.spatial.distance import squareform
+from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.model_selection import StratifiedKFold, cross_val_score
 
 from polaris_generalization.config import INTERIM_DATA_DIR, PROCESSED_DATA_DIR
 from polaris_generalization.visualization import DEFAULT_DPI, set_style
@@ -34,6 +46,46 @@ from polaris_generalization.visualization import DEFAULT_DPI, set_style
 app = typer.Typer()
 
 ENDPOINT = "LogD"
+
+# Endpoints with temporal coverage (matches the 2.04 time-split set; RLM is
+# absent from the canonical dataset). Used for the per-assay drift checks.
+DRIFT_ENDPOINTS = [
+    "LogD",
+    "KSOL",
+    "HLM CLint",
+    "MLM CLint",
+    "Caco-2 Permeability Papp A>B",
+    "Caco-2 Permeability Efflux",
+    "MPPB",
+    "MBPB",
+    "MGMB",
+]
+
+# Cap on points drawn in the swarm overlay per temporal window: a random
+# subsample keeps the swarm legible and fast for the larger assays (the box
+# summary underneath still uses every molecule).
+SWARM_MAX_PER_WINDOW = 120
+
+# An |rho| this large is treated as an appreciable temporal trend. With several
+# thousand molecules per assay, p-values alone flag trivial effects, so drift is
+# reported as significant only when it is both reliable (p<0.05) and appreciable.
+DRIFT_RHO_THRESHOLD = 0.1
+
+
+def log_transform(values: np.ndarray, endpoint: str) -> np.ndarray:
+    """Modeling log transform: log10(clip(x, 1e-10) + 1) for all but LogD."""
+    if endpoint == "LogD":
+        return values
+    return np.log10(np.clip(values, 1e-10, None) + 1.0)
+
+
+def fold_ids_for(folds_df: pd.DataFrame, endpoint: str, names: np.ndarray) -> np.ndarray:
+    """Map a folds parquet to a fold-id array aligned to `names` (repeat 0)."""
+    sub = folds_df[folds_df["endpoint"] == endpoint]
+    if "repeat" in sub.columns:
+        sub = sub[sub["repeat"] == 0]
+    fold_map = dict(zip(sub["Molecule Name"], sub["fold"]))
+    return np.array([fold_map.get(n, -99) for n in names])
 
 
 def get_train_test_masks(fold_ids: np.ndarray, fold_id: int, strategy: str) -> tuple[np.ndarray, np.ndarray]:
@@ -77,6 +129,316 @@ def plot_distance_distributions(strategy_nn1: dict, colors: dict, output_dir: Pa
     fig.savefig(output_dir / "distance_distributions_by_strategy.png", dpi=dpi, bbox_inches="tight")
     logger.info("Saved distance_distributions_by_strategy.png")
     plt.close("all")
+
+
+def draw_drift_panel(ax, ep: str, row: pd.Series, windows: list, rng: np.random.Generator) -> None:
+    """Draw one label-drift panel: box over every molecule plus a swarm of a
+    capped random subsample. Coral if the assay drifts appreciably, else gray."""
+    face = "coral" if row["drift_significant"] else "lightgray"
+    order = list(range(1, len(windows) + 1))
+
+    box_frames, swarm_frames = [], []
+    for i, w in enumerate(windows):
+        box_frames.append(pd.DataFrame({"window": i + 1, "value": w}))
+        sample = w if len(w) <= SWARM_MAX_PER_WINDOW else rng.choice(
+            w, SWARM_MAX_PER_WINDOW, replace=False
+        )
+        swarm_frames.append(pd.DataFrame({"window": i + 1, "value": sample}))
+    box_df = pd.concat(box_frames, ignore_index=True)
+    swarm_df = pd.concat(swarm_frames, ignore_index=True)
+
+    sns.boxplot(
+        data=box_df, x="window", y="value", order=order, ax=ax,
+        color=face, showfliers=False, width=0.6, boxprops={"alpha": 0.6},
+    )
+    sns.swarmplot(
+        data=swarm_df, x="window", y="value", order=order, ax=ax,
+        color="0.25", size=1.3, alpha=0.65,
+    )
+    ax.set_xlabel("Temporal window (early → late)")
+    ax.set_ylabel(ep if ep == "LogD" else f"log10({ep} + 1)", fontsize=9)
+    ax.set_title(
+        f"{ep}  (ρ={row['spearman_rho']:+.2f}{'*' if row['drift_significant'] else ''})",
+        fontsize=10,
+    )
+
+
+def draw_regime_panel(ax, points_df: pd.DataFrame, color_fn, size: int, title: str) -> None:
+    """Draw one extrapolation-regime scatter: x = structural novelty (median
+    test-to-train 1-NN), y = value extrapolation (% test beyond training range)."""
+    for _, r in points_df.iterrows():
+        ax.scatter(r["median_1nn"], r["value_novelty_frac"] * 100,
+                   color=color_fn(r["label"]), s=size, edgecolor="white", zorder=3)
+        ax.annotate(r["label"], (r["median_1nn"], r["value_novelty_frac"] * 100),
+                    fontsize=8, xytext=(4, 4), textcoords="offset points")
+    ax.set_xlabel("Median test-to-train 1-NN Jaccard distance\n(structural novelty: unseen series)")
+    ax.set_ylabel("% test beyond training value range\n(value extrapolation: unseen labels)")
+    ax.set_title(title, fontsize=11)
+
+
+def analyze_label_drift_over_time(
+    df: pd.DataFrame, time_folds: pd.DataFrame, output_dir: Path, dpi: int
+) -> tuple[pd.DataFrame, dict]:
+    """Per-assay label drift across temporal windows (Engkvist review point).
+
+    Temporal windows are the exact time-split folds defined in 2.04 and loaded
+    from time_cv_folds.parquet (fold -1 = earliest train-only chunk, folds 0..k
+    = successive expanding-window test chunks). For each endpoint, reports the
+    monotonic trend (Spearman rho of label vs ordinal index) plus the
+    first-vs-last-window distribution shift (KS). Matches the studies Engkvist
+    referenced: some assays drift, others do not.
+    """
+    rows = []
+    panel_windows = {}
+    for ep in DRIFT_ENDPOINTS:
+        mask = df[ep].notna().values
+        sub = df[mask]
+        names = sub["Molecule Name"].values
+        midx = sub["mol_index"].values
+        vals = log_transform(sub[ep].values.astype(float), ep)
+        fold_ids = fold_ids_for(time_folds, ep, names)
+
+        # Order windows earliest → latest using the saved time-split folds.
+        fold_vals = sorted(f for f in set(fold_ids.tolist()) if f >= -1)
+        windows = [vals[fold_ids == w] for w in fold_vals]
+        rho, p = stats.spearmanr(midx, vals)
+        ks_stat, ks_p = stats.ks_2samp(windows[0], windows[-1])
+        significant = bool((p < 0.05) and (abs(rho) >= DRIFT_RHO_THRESHOLD))
+
+        rows.append({
+            "endpoint": ep,
+            "n": int(mask.sum()),
+            "spearman_rho": float(rho),
+            "spearman_p": float(p),
+            "median_first_window": float(np.median(windows[0])),
+            "median_last_window": float(np.median(windows[-1])),
+            "delta_median": float(np.median(windows[-1]) - np.median(windows[0])),
+            "ks_first_last": float(ks_stat),
+            "ks_pvalue": float(ks_p),
+            "drift_significant": significant,
+        })
+        panel_windows[ep] = windows
+
+    drift_df = pd.DataFrame(rows)
+
+    # Figure: per-endpoint value distributions across temporal windows, shown as
+    # a box (every molecule) with a swarm of a capped random subsample on top.
+    rng = np.random.default_rng(42)
+    fig, axes = plt.subplots(3, 3, figsize=(15, 11))
+    for ax, ep in zip(axes.ravel(), DRIFT_ENDPOINTS):
+        row = drift_df[drift_df["endpoint"] == ep].iloc[0]
+        draw_drift_panel(ax, ep, row, panel_windows[ep], rng)
+
+    fig.tight_layout()
+    fig.savefig(output_dir / "label_drift_over_time.png", dpi=dpi, bbox_inches="tight")
+    drift_df.to_csv(output_dir / "label_drift_over_time.csv", index=False)
+    logger.info("Saved label_drift_over_time.png / .csv")
+    for _, r in drift_df.iterrows():
+        logger.info(
+            f"  {r['endpoint']}: rho={r['spearman_rho']:+.3f} (p={r['spearman_p']:.1e}), "
+            f"d_median={r['delta_median']:+.3f}, drift={'YES' if r['drift_significant'] else 'no'}"
+        )
+    plt.close("all")
+    return drift_df, panel_windows
+
+
+def _structural_and_value_novelty(
+    fold_ids: np.ndarray, D_sub: np.ndarray, values: np.ndarray, strategy: str
+) -> tuple[float, float]:
+    """Pool folds and return (median test-to-train 1-NN, fraction of test beyond
+    the training value range). The first axis is structural novelty (unseen
+    series); the second is value extrapolation (unseen labels)."""
+    n_folds = int(max(f for f in fold_ids if f >= 0)) + 1
+    nn1_pool, n_outside, n_test = [], 0, 0
+    for k in range(n_folds):
+        train_mask, test_mask = get_train_test_masks(fold_ids, k, strategy)
+        test_idx, train_idx = np.where(test_mask)[0], np.where(train_mask)[0]
+        if len(test_idx) == 0 or len(train_idx) == 0:
+            continue
+        nn1_pool.append(D_sub[np.ix_(test_idx, train_idx)].min(axis=1))
+        lo, hi = values[train_mask].min(), values[train_mask].max()
+        n_outside += int(np.sum((values[test_mask] < lo) | (values[test_mask] > hi)))
+        n_test += int(test_mask.sum())
+    median_1nn = float(np.median(np.concatenate(nn1_pool)))
+    value_frac = n_outside / n_test if n_test else 0.0
+    return median_1nn, value_frac
+
+
+def analyze_extrapolation_regimes(
+    df: pd.DataFrame,
+    dist_square: np.ndarray,
+    time_folds: pd.DataFrame,
+    strategies: dict,
+    logd_values: np.ndarray,
+    logd_Dsub: np.ndarray,
+    colors: dict,
+    output_dir: Path,
+    dpi: int,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Separate value extrapolation from structural extrapolation (Rodriguez point).
+
+    Panel A: each assay under the time-split, placed on (structural novelty,
+    value extrapolation). Panel B: the three strategies for LogD, anchoring the
+    two axes (cluster = unseen structure / values seen before; target = unseen
+    values; time = mixed).
+    """
+    # Panel A: per-endpoint time-split.
+    a_rows = []
+    for ep in DRIFT_ENDPOINTS:
+        mask = df[ep].notna().values
+        names = df.loc[mask, "Molecule Name"].values
+        vals = df.loc[mask, ep].values.astype(float)
+        idx = np.where(mask)[0]
+        D_sub = dist_square[np.ix_(idx, idx)]
+        fold_ids = fold_ids_for(time_folds, ep, names)
+        median_1nn, value_frac = _structural_and_value_novelty(fold_ids, D_sub, vals, "time")
+        a_rows.append({
+            "group": "time-split (per assay)",
+            "label": ep,
+            "median_1nn": median_1nn,
+            "value_novelty_frac": value_frac,
+        })
+    a_df = pd.DataFrame(a_rows)
+
+    # Panel B: three strategies for LogD.
+    b_rows = []
+    for strat_name, strat in strategies.items():
+        median_1nn, value_frac = _structural_and_value_novelty(
+            strat["fold_ids"], logd_Dsub, logd_values, strat_name
+        )
+        b_rows.append({
+            "group": "strategy (LogD)",
+            "label": strat_name,
+            "median_1nn": median_1nn,
+            "value_novelty_frac": value_frac,
+        })
+    b_df = pd.DataFrame(b_rows)
+
+    fig, axes = plt.subplots(1, 2, figsize=(15, 6))
+    draw_regime_panel(axes[0], a_df, lambda _: "coral", 60, "Time-split per assay")
+    draw_regime_panel(axes[1], b_df, lambda label: colors[label], 120, "Strategies (LogD)")
+
+    fig.tight_layout()
+    fig.savefig(output_dir / "extrapolation_regimes.png", dpi=dpi, bbox_inches="tight")
+    regimes_df = pd.concat([a_df, b_df], ignore_index=True)
+    regimes_df.to_csv(output_dir / "extrapolation_regimes.csv", index=False)
+    logger.info("Saved extrapolation_regimes.png / .csv")
+    for _, r in regimes_df.iterrows():
+        logger.info(
+            f"  [{r['group']}] {r['label']}: median_1nn={r['median_1nn']:.3f}, "
+            f"value_novelty={r['value_novelty_frac']:.1%}"
+        )
+    plt.close("all")
+    return regimes_df, a_df, b_df
+
+
+def plot_combined_si_figure(
+    drift_df: pd.DataFrame,
+    panel_windows: dict,
+    a_df: pd.DataFrame,
+    b_df: pd.DataFrame,
+    colors: dict,
+    output_dir: Path,
+    dpi: int,
+) -> None:
+    """Stack both analyses into one SI figure: per-assay label drift (top, a)
+    over the value-vs-structural extrapolation map (bottom, b)."""
+    rng = np.random.default_rng(42)
+    fig = plt.figure(figsize=(15, 18), constrained_layout=True)
+    subfigs = fig.subfigures(2, 1, height_ratios=[3, 1])
+
+    top_axes = subfigs[0].subplots(3, 3)
+    for ax, ep in zip(top_axes.ravel(), DRIFT_ENDPOINTS):
+        row = drift_df[drift_df["endpoint"] == ep].iloc[0]
+        draw_drift_panel(ax, ep, row, panel_windows[ep], rng)
+    subfigs[0].suptitle("(a) Label drift over time", x=0.01, ha="left",
+                        fontsize=14, fontweight="bold")
+
+    bot_axes = subfigs[1].subplots(1, 2)
+    draw_regime_panel(bot_axes[0], a_df, lambda _: "coral", 60, "Time-split per assay")
+    draw_regime_panel(bot_axes[1], b_df, lambda label: colors[label], 120, "Strategies (LogD)")
+    subfigs[1].suptitle("(b) Value vs structural extrapolation", x=0.01, ha="left",
+                        fontsize=14, fontweight="bold")
+
+    fig.savefig(output_dir / "label_drift_and_regimes_combined.png", dpi=dpi, bbox_inches="tight")
+    logger.info("Saved label_drift_and_regimes_combined.png")
+    plt.close("all")
+
+
+def ecfp4_matrix(smiles: list[str], nbits: int = 2048, radius: int = 2) -> np.ndarray:
+    """Dense ECFP4 bit matrix (chirality-aware), zero row for unparseable SMILES."""
+    rows = []
+    for smi in smiles:
+        mol = Chem.MolFromSmiles(smi) if isinstance(smi, str) else None
+        arr = np.zeros(nbits, dtype=np.float32)
+        if mol is not None:
+            fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius, nBits=nbits, useChirality=True)
+            arr[list(fp.GetOnBits())] = 1.0
+        rows.append(arr)
+    return np.vstack(rows)
+
+
+def adversarial_validation_by_strategy(
+    df: pd.DataFrame, strategies: dict, colors: dict, output_dir: Path, dpi: int
+) -> pd.DataFrame:
+    """Covariate-shift comparison of split strategies via adversarial validation.
+
+    For each strategy and fold, a classifier (ECFP4 features) is trained to tell
+    test molecules from their training set; the cross-validated AUROC measures how
+    separable they are. AUROC near 0.5 means no covariate shift (random-like);
+    near 1.0 means the test set is structurally out-of-distribution. A random
+    split is included as the 0.5 anchor. This complements the KS label-shift
+    diagnostic: together they separate covariate shift from label shift.
+    """
+    mask = df[ENDPOINT].notna().values
+    logger.info(f"Adversarial validation on {int(mask.sum())} {ENDPOINT} molecules (ECFP4)")
+    X = ecfp4_matrix(df.loc[mask, "SMILES"].tolist())
+
+    rng = np.random.default_rng(42)
+    rand_folds = rng.integers(0, 5, size=X.shape[0])
+
+    # (label, fold_ids, train/test convention): random and cluster hold out a
+    # fold against all others; time/target use the expanding-window convention.
+    tasks = [(name, strat["fold_ids"], name) for name, strat in strategies.items()]
+    tasks.append(("random", rand_folds, "cluster"))
+
+    cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=0)
+    rows = []
+    for label, fold_ids, convention in tasks:
+        n_folds = int(max(f for f in fold_ids if f >= 0)) + 1
+        fold_aurocs = []
+        for k in range(n_folds):
+            train_mask, test_mask = get_train_test_masks(fold_ids, k, convention)
+            if train_mask.sum() < 20 or test_mask.sum() < 20:
+                continue
+            sub = train_mask | test_mask
+            y_adv = test_mask[sub].astype(int)
+            clf = HistGradientBoostingClassifier(max_iter=60, random_state=0)
+            auroc = cross_val_score(clf, X[sub], y_adv, scoring="roc_auc", cv=cv).mean()
+            fold_aurocs.append(float(auroc))
+        rows.append({"strategy": label, "mean_auroc": float(np.mean(fold_aurocs)),
+                     "n_folds": len(fold_aurocs)})
+    adv_df = pd.DataFrame(rows).sort_values("mean_auroc").reset_index(drop=True)
+
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    bar_colors = [colors.get(s, "gray") for s in adv_df["strategy"]]
+    ax.bar(np.arange(len(adv_df)), adv_df["mean_auroc"], color=bar_colors, edgecolor="white")
+    ax.axhline(0.5, color="0.4", linestyle="--", linewidth=1.2, label="no shift (0.5)")
+    ax.set_xticks(np.arange(len(adv_df)))
+    ax.set_xticklabels(adv_df["strategy"])
+    ax.set_ylabel("Adversarial-validation AUROC\n(test-vs-train separability)")
+    ax.set_ylim(0.4, 1.0)
+    for i, v in enumerate(adv_df["mean_auroc"]):
+        ax.annotate(f"{v:.2f}", (i, v), ha="center", va="bottom", fontsize=9)
+    ax.legend(frameon=True)
+    fig.tight_layout()
+    fig.savefig(output_dir / "adversarial_validation.png", dpi=dpi, bbox_inches="tight")
+    adv_df.to_csv(output_dir / "adversarial_validation.csv", index=False)
+    logger.info("Saved adversarial_validation.png / .csv")
+    for _, r in adv_df.iterrows():
+        logger.info(f"  {r['strategy']}: AUROC={r['mean_auroc']:.3f} ({r['n_folds']} folds)")
+    plt.close("all")
+    return adv_df
 
 
 @app.command()
@@ -327,6 +689,24 @@ def main(
     # ── 7. Save summary ──────────────────────────────────────────────
     summary_df.to_csv(output_dir / "split_quality_summary.csv", index=False)
     logger.info(f"Saved split_quality_summary.csv ({len(summary_df)} rows)")
+
+    # ── 8. Label drift over time, per assay (Engkvist review point) ───
+    logger.info("Analyzing per-assay label drift over time")
+    drift_df, panel_windows = analyze_label_drift_over_time(df, time_folds, output_dir, dpi)
+
+    # ── 9. Value vs structural extrapolation regimes (Rodriguez point)─
+    logger.info("Mapping value vs structural extrapolation regimes")
+    _, a_df, b_df = analyze_extrapolation_regimes(
+        df, dist_square, time_folds, strategies, ep_values, D_sub, colors, output_dir, dpi
+    )
+
+    # ── 10. Combined SI figure (drift on top, regimes on bottom) ──────
+    logger.info("Building combined SI figure")
+    plot_combined_si_figure(drift_df, panel_windows, a_df, b_df, colors, output_dir, dpi)
+
+    # ── 11. Adversarial validation: covariate shift per strategy ──────
+    logger.info("Running adversarial validation across strategies")
+    adversarial_validation_by_strategy(df, strategies, colors, output_dir, dpi)
 
     logger.info(f"All outputs saved to {output_dir}")
 

@@ -80,7 +80,19 @@ This paper sits between a review and an opinion paper. Instead of prescriptive "
 - Models trained predominantly on one or two major series must extrapolate when encountering a distinct series with different pharmacophoric features and SAR patterns
 - Visualize representative molecules from the 5 largest clusters (6 random examples each)
 
-**Figures**: Figure 2 (cluster size distribution)
+**Figures**: Figure 3 (cluster size distribution)
+
+### 2b. Cross-dataset characterization: the right split is a property of the dataset (NB 4.01, SI)
+
+**Claim** (Wognum review): dataset characterization, not protocol, dictates which splits are even constructible — you cannot apply the same evaluation blindly to every dataset.
+
+**Content**: same representation (ECFP4, Tanimoto, Butina cutoff 0.7) applied to the public Biogen ADME dataset (Fang et al. 2023, n=3,521) vs ExpansionRx:
+- ExpansionRx concentrates into a few series (largest Butina cluster 33.8%, top-10 84%, 135 clusters); Biogen is diffuse (largest 2.1%, top-10 14%, 1,169 clusters, 54% singletons)
+- Intra-set median 1-NN distance: ExpansionRx 0.19 vs Biogen 0.55 (structurally scattered)
+- Random-split median test-to-train distance: ExpansionRx 0.20 vs Biogen 0.57 — in Biogen a random split is already as hard as a deliberate one, and a series-based IID/OOD split is not constructible
+- Take-home: split choice must follow characterization; characterization is a feasibility check, not a formality
+
+**Figures**: Figure S2 (cross-dataset: cluster concentration, intra-set 1-NN, random-split distance)
 
 ### 3. Deployment-matched splits probe complementary generalization axes
 
@@ -107,7 +119,12 @@ This paper sits between a review and an opinion paper. Instead of prescriptive "
 
 All strategies produced balanced fold sizes (max/min ratio < 1.15). Distance distributions illustrated for LogD as representative endpoint.
 
-**Figures**: Figure 3 (test-to-train 1-NN distance distributions by strategy)
+#### 3d. Verifying the intended shift (split diagnostics, NB 2.06)
+- **Temporal label drift** (Engkvist review): per-assay value distributions drift over time-split windows in 8 of 9 assays (Spearman trend, p<0.05 and |ρ|≥0.10); strongest for Caco-2 permeability, KSOL, and MLM CLint; only MBPB stable. Direction is assay-specific (LogD/clearance down, solubility/efflux up), not uniform optimization.
+- **Covariate vs label shift are distinct axes** (Rodríguez review): the time split shifts values within the already-seen range (≤0.9% of test molecules beyond the training range in every assay), whereas only the target-value split produces genuine value extrapolation (91.5% of LogD test molecules beyond range).
+- **Adversarial validation** (ECFP4 classifier AUROC, model-based covariate-shift criterion): random 0.51 (anchor), target 0.86, time 0.98, cluster 1.00. Read with the KS label-shift (cluster 0.06–0.17, time 0.06–0.27, target 0.96–0.99), this decomposes covariate shift (cluster/time) from label shift (target).
+
+**Figures**: Figure 4 (test-to-train 1-NN distance distributions by strategy); Figure S3 (label-drift + extrapolation-regime figure); SI adversarial-validation AUROC bar chart
 
 ### 4. Failure mode 1: performance degrades with structural distance and target-value extrapolation
 
@@ -141,7 +158,7 @@ Both models show the same strategy ranking. CheMeleon achieves ~7% lower MA-RAE 
 
 - **Representation-specific insight**: Caco-2 endpoints show minimal degradation under XGBoost but substantial degradation under CheMeleon (2.91× and 1.60×). The flat XGBoost curve reflects global RDKit 2D descriptors carrying passive-permeability signal independent of structural distance — a representation property, not an endpoint property. CheMeleon's graph encoding lacks these global descriptors, exposing the true distance-dependence.
 
-**Figures**: Figure 4 (XGBoost vs CheMeleon degradation ratio comparison), Figures S11–S12 (per-model performance-over-distance detail), Table 2 (per-endpoint RAE by strategy, both models)
+**Figures**: Figure 5 (XGBoost vs CheMeleon performance-over-distance), Table 3 (per-endpoint RAE by strategy, both models)
 
 ### 5. Failure mode 1b: IID versus OOD degradation across chemical series boundaries
 
@@ -175,8 +192,9 @@ Both models show the same strategy ranking. CheMeleon achieves ~7% lower MA-RAE 
 - KSOL (6.5× XGB, 46.9× CM): solubility depends on crystal packing forces, highly scaffold-dependent; CheMeleon's better IID fit exacerbates overconfident extrapolation
 - MLM CLint (6.4× XGB, 8.1× CM): CYP450 metabolic soft-spot accessibility is scaffold-dependent; both models overfit to training series SAR
 - LogD (5.1× XGB, 4.4× CM): CheMeleon captures global lipophilicity patterns that partially transfer across scaffolds — the exception that proves the rule
+- LogD amine-pKa diagnostic (NB 2.09): the OOD series is 85% amino-pyridine vs 97% aliphatic amine in IID; the model over-predicts OOD LogD by a systematic 0.4–1.5 log units (vs +0.09 IID bias), not random scatter, consistent with an amine ionization/pKa-regime shift the IID-trained model cannot transfer (LogD depends on fraction ionized at assay pH). The OOD R² collapse (0.645→0.05) is not a variance artifact — OOD variance is *higher* — but a genuine ~2.2× RMSE increase
 
-**Figures**: Figure 5 (IID vs OOD RAE comparison, both models), Table 3 (IID vs OOD metrics: R², Spearman, SE fold-change for both XGBoost and CheMeleon)
+**Figures**: Figure 6 (IID vs OOD squared-error distributions, both models), Table 4 (IID vs OOD metrics: R², Spearman, SE fold-change for both XGBoost and CheMeleon)
 
 ### 6. Failure mode 2: scaffold splits offer no improvement; cluster-based splitting is required
 
@@ -202,7 +220,7 @@ Both models show the same strategy ranking. CheMeleon achieves ~7% lower MA-RAE 
 - **KS tests**: scaffold vs random D = 0.203 (modest), cluster vs random D = 0.662 (large), cluster vs scaffold D = 0.536, all p < 10^-10
 - **Structural explanation**: 3,337 unique Murcko scaffolds; 2,252 (67.5%) contain only a single molecule, median size 1. Greedy assignment of singletons to folds ≈ random assignment. Structurally similar molecules with different Murcko frameworks (ring size change, heteroatom substitution) get assigned to different groups but remain proximate in fingerprint space
 
-**Figures**: Figure S2 (performance comparison, both models), Table S2 (per-endpoint RAE by strategy for XGBoost and CheMeleon) — supplementary
+**Figures**: Figure S5 (RAE by endpoint across scaffold/random/cluster splits, both models), Table S2 (per-endpoint RAE by strategy for XGBoost and CheMeleon) — supplementary
 
 ### 6b. Scaffold boundary analysis: scaffold splits are a blunt instrument you can't tune
 
@@ -271,7 +289,7 @@ Both models show the same strategy ranking. CheMeleon achieves ~7% lower MA-RAE 
 
 **Practical recommendation**: Use distance-aware splits with multiple repeats and report confidence intervals. Five cluster repeats with wide CIs give an honest picture; narrow random-CV CIs are a property of sampling, not of generalization.
 
-**Figures**: Figure S3 (RAE distributions, both models), Table S3 (R² variance for XGBoost and CheMeleon) — supplementary
+**Figures**: Figure S7 (random- vs cluster-split RAE across 5 repeats, both models), Table S3 (R² variance for XGBoost and CheMeleon) — supplementary
 
 ### 8. Failure mode 3: activity cliffs expose interpolation failures
 
@@ -295,7 +313,7 @@ Both models show the same strategy ranking. CheMeleon achieves ~7% lower MA-RAE 
 - MBPB (0 cliffs) and MPPB (4 cliffs) had insufficient cliff molecules for evaluation
 - Endpoints particularly cliff-prone when governed by specific structural motifs (CYP450 recognition, P-gp substrate features)
 
-**Figures**: Figure S4 (activity cliff RAE comparison, both models), Table S4 (cliff prevalence and performance for XGBoost and CheMeleon) — supplementary
+**Figures**: Figure 7 (activity-cliff penalty, both models — main text), Figure S8 (cliff-definition sensitivity sweep), Table S4 (cliff prevalence and performance for XGBoost and CheMeleon)
 
 ### 9. Failure mode 4: molecular representation limits prediction consistency
 
@@ -327,7 +345,7 @@ Both models show the same strategy ranking. CheMeleon achieves ~7% lower MA-RAE 
 
 **Practical caveat**: Many public/pharma datasets contain unreliable stereochemistry annotations (racemic synthesis, incomplete chiral separation). Chirality-aware modeling can be counterproductive by fitting noise.
 
-**Figures**: Figure 8 (fingerprint distances), Table 5 (prediction consistency, both models), Figures S5–S6 (prediction CV and consistency ratio comparisons, both models), Figure 9 (resonance sensitivity: XGBoost vs CheMeleon swing comparison — main text), Figure S8 (resonance fingerprint distances — supplementary)
+**Figures**: Figure S9 (intra-group fingerprint distances), Table 5 (prediction consistency, both models), Figures S10–S11 (prediction CV and predicted-vs-true range, both models), Figure 8 (resonance sensitivity: XGBoost vs CheMeleon swing comparison — main text), Figure S12 (resonance fingerprint distances — supplementary)
 
 ## Discussions
 
@@ -411,31 +429,30 @@ Both models are presented as co-equal architectures throughout the results: XGBo
 
 ## Figures (current manuscript mapping)
 
-Main figures use combined panels (XGBoost vs CheMeleon side-by-side) where available to reflect equal model coverage. Non-modeling figures (Figs 1–4 and Fig 8 fingerprint distances) are model-independent. Individual model figures appear in supplementary for per-model detail where the combined panel is not the main display.
+Numbering matches the current `docs/paper/manuscript.docx` (verified 2026-06-22): main Figures 1–8 and supplementary Figures S1–S12. Main modeling figures show XGBoost vs CheMeleon together; non-modeling figures (Figs 1–4) are model-independent. Files live under `data/processed/<notebook>/` (per-model and `combined/` subdirectories).
 
-| Figure | Title | Source | File |
-|--------|-------|--------|------|
-| Fig 1 | Framework overview | NB 3.02 | `3.02-seal-framework-figure/framework_overview.png` |
-| Fig 2 | Train vs test distance distributions | NB 0.02 | `0.02-seal-ecfp-distance-exploration/train_vs_test_distances.png` |
-| Fig 3 | Butina cluster size distribution | NB 2.01 | `2.01-seal-chemical-space-analysis/cluster_size_distribution.png` |
-| Fig 4 | Test-to-train 1-NN distance by splitting strategy | NB 2.06 | `2.06-seal-split-quality/distance_distributions_by_strategy.png` |
-| Fig 5 | Performance-over-distance: XGBoost vs CheMeleon | NB 2.07 | `2.07-seal-performance-distance/combined/performance_over_distance_combined.png` |
-| Fig 6 | IID vs OOD squared-error distributions | NB 2.09 | `2.09-seal-iid-vs-ood-series/xgboost/squared_error_distributions_v2.png` + `chemeleon/squared_error_distributions_v2.png` |
-| Fig 7 | Activity-cliff penalty: XGBoost vs CheMeleon | NB 2.10 | `2.10-seal-activity-cliff-eval/combined/rae_cliff_comparison.png` |
-| Fig 8 | Intra-group fingerprint distances (stereo/scaffold/random) | NB 2.13 | `2.13-seal-molecular-variants/xgboost/fingerprint_distances.png` |
-| Fig 9 | Resonance sensitivity: XGBoost vs CheMeleon | NB 2.15 | `2.15-zalte-resonance-variants/xgboost/resonance_sensitivity_panel.png` + `chemeleon/resonance_sensitivity_panel.png` |
-| Fig S1 | Baseline performance: XGBoost vs CheMeleon R² | NB 2.08 | `2.08-seal-baseline-performance/combined/r2_comparison.png` |
-| Fig S2 | Scaffold vs random vs cluster: both models | NB 2.11 | `2.11-seal-scaffold-vs-random/combined_cluster_rae.png` |
-| Fig S3 | Split variance RAE distributions: both models | NB 2.12 | `2.12-seal-split-variance/combined_cluster_rae.png` |
-| Fig S4 | Activity cliff evaluation: both models | NB 2.10 | `2.10-seal-activity-cliff-eval/combined/rae_cliff_comparison.png` |
-| Fig S5 | Prediction CV by variant type: both models | NB 2.13 | `2.13-seal-molecular-variants/combined/pred_cv_stereoisomer.png` |
-| Fig S6 | Consistency ratio comparison | NB 2.13 | `2.13-seal-molecular-variants/combined/consistency_ratio_scaffold_decoration.png` |
-| Fig S7 | Activity concordance by scaffold membership | NB 2.16 | `2.16-araripe-scaffold-boundary/activity_concordance.png` |
-| Fig S8 | Resonance form fingerprint distance distributions | NB 2.15 | `2.15-zalte-resonance-variants/fingerprint_distances.png` |
-| Fig S9 | Per-model detail: XGBoost scatter predictions | NB 2.08 | `2.08-seal-baseline-performance/xgboost/scatter_predictions.png` |
-| Fig S10 | Per-model detail: CheMeleon scatter predictions | NB 2.08 | `2.08-seal-baseline-performance/chemeleon/scatter_predictions.png` |
-| Fig S11 | Performance-over-distance (XGBoost detail) | NB 2.07 | `2.07-seal-performance-distance/xgboost/performance_over_distance.png` |
-| Fig S12 | Performance-over-distance (CheMeleon detail) | NB 2.07 | `2.07-seal-performance-distance/chemeleon/performance_over_distance.png` |
+| Figure | Title | Source |
+|--------|-------|--------|
+| Fig 1 | Framework overview | NB 3.02 |
+| Fig 2 | Train vs test 1-NN distance (competition split) | NB 0.02 |
+| Fig 3 | Butina cluster size distribution | NB 2.01 |
+| Fig 4 | Test-to-train 1-NN distance by splitting strategy | NB 2.06 |
+| Fig 5 | Performance-over-distance: XGBoost vs CheMeleon | NB 2.07 |
+| Fig 6 | IID vs OOD squared-error distributions | NB 2.09 |
+| Fig 7 | Activity-cliff penalty: XGBoost vs CheMeleon | NB 2.10 |
+| Fig 8 | Resonance-form sensitivity: XGBoost vs CheMeleon | NB 2.15 |
+| Fig S1 | Max Tanimoto similarity to ChEMBL 36 | NB 0.03 |
+| Fig S2 | Cross-dataset characterization (ExpansionRx vs Biogen ADME) | NB 4.01 |
+| Fig S3 | Temporal label drift + value-vs-structural extrapolation | NB 2.06 |
+| Fig S4 | Baseline performance on competition split (R², scatter) | NB 2.08 |
+| Fig S5 | RAE by endpoint across scaffold/random/cluster splits | NB 2.11 |
+| Fig S6 | Activity difference vs Tanimoto distance by scaffold membership | NB 2.16 |
+| Fig S7 | Random- vs cluster-split RAE across 5 repeats (variance) | NB 2.12 |
+| Fig S8 | Activity-cliff definition sensitivity (similarity-threshold sweep) | NB 2.10 |
+| Fig S9 | Intra-group fingerprint distances (stereo/scaffold/random) | NB 2.13 |
+| Fig S10 | Per-endpoint prediction CV by variant type | NB 2.13 |
+| Fig S11 | Within-group predicted vs true range by variant type | NB 2.13 |
+| Fig S12 | Resonance-form fingerprint distance distributions | NB 2.15 |
 
 ## Key References
 
