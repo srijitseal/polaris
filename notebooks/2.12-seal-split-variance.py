@@ -1,10 +1,10 @@
 #!/usr/bin/env python
-"""Split variance study (paper Fig S2, ref: Pat Walters' blog).
+"""Split variance study (paper Fig S7, ref: Pat Walters' blog).
 
-Demonstrates that single-split evaluation is misleading by running multiple
-repeats of random (20 seeds) and cluster-based (5 repeats) CV, showing the
-variance in performance metrics. Motivates need for repeated CV with confidence
-intervals rather than single point estimates.
+Demonstrates that single-split evaluation is misleading by running 5 repeats
+each of random and cluster-based 5-fold CV, showing the variance in performance
+metrics. Motivates need for repeated CV with confidence intervals rather than
+single point estimates.
 
 Usage:
     pixi run -e cheminformatics python notebooks/2.12-seal-split-variance.py
