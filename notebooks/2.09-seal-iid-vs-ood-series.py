@@ -1,10 +1,10 @@
 #!/usr/bin/env python
-"""IID vs OOD on chemical series — the "hero" example (paper Fig 7).
+"""ID vs OOD on chemical series — the "hero" example (paper Fig 7).
 
 Takes two large Butina clusters (chemical series), time-splits the largest
-into train + IID validation, uses the smaller cluster as OOD test set, trains
+into train + ID validation, uses the smaller cluster as OOD test set, trains
 XGBoost or CheMeleon models, and compares squared error intra-series
-(IID) vs inter-series (OOD). Demonstrates that chemical series + time-split
+(ID) vs inter-series (OOD). Demonstrates that chemical series + time-split
 uniquely enable this analysis.
 
 Usage:
@@ -148,7 +148,7 @@ def compute_features(smiles_list: list[str]) -> tuple[np.ndarray, np.ndarray]:
 
 def plot_squared_error_distributions(errors_df: pd.DataFrame, metrics_df: pd.DataFrame,
                                      output_dir: Path, dpi: int) -> None:
-    """Plot IID vs OOD squared error as paired box plots per endpoint."""
+    """Plot ID vs OOD squared error as paired box plots per endpoint."""
     active_endpoints = sorted(errors_df["endpoint"].unique())
     n_ep = len(active_endpoints)
 
@@ -202,7 +202,7 @@ def plot_squared_error_distributions(errors_df: pd.DataFrame, metrics_df: pd.Dat
 
     # Legend
     from matplotlib.patches import Patch
-    ax.legend(handles=[Patch(facecolor="steelblue", alpha=0.7, label="IID (within-series)"),
+    ax.legend(handles=[Patch(facecolor="steelblue", alpha=0.7, label="ID (within-series)"),
                        Patch(facecolor="coral", alpha=0.7, label="OOD (cross-series)")],
               loc="lower left")
 
@@ -234,18 +234,18 @@ def _migrate_flat_outputs(output_dir: Path) -> None:
 
 
 def analyze_amine_pka_logd(errors_df: pd.DataFrame, model_dir: Path, dpi: int) -> None:
-    """LogD amine-ionization diagnostic for the IID vs OOD series.
+    """LogD amine-ionization diagnostic for the ID vs OOD series.
 
-    The OOD series is dominated by weakly basic amino-pyridines while the IID
+    The OOD series is dominated by weakly basic amino-pyridines while the ID
     series is mostly strongly basic aliphatic amines. Because LogD depends on the
-    fraction ionized at assay pH (7.4), an IID-trained model systematically
+    fraction ionized at assay pH (7.4), an ID-trained model systematically
     misplaces the differently ionized OOD series. This characterizes the amine
     composition of each series and the resulting signed LogD prediction bias by
     amine type, to back the mechanistic (pKa) reading of the LogD OOD failure.
     """
     logd = errors_df[errors_df["endpoint"] == "LogD"]
     if logd.empty or not {"iid", "ood"}.issubset(set(logd["set"])):
-        logger.warning("No LogD IID/OOD predictions found; skipping amine-pKa diagnostic")
+        logger.warning("No LogD ID/OOD predictions found; skipping amine-pKa diagnostic")
         return
 
     smiles = pd.read_parquet(INTERIM_DATA_DIR / "expansion_tx.parquet")[["Molecule Name", "SMILES"]]
@@ -264,14 +264,14 @@ def analyze_amine_pka_logd(errors_df: pd.DataFrame, model_dir: Path, dpi: int) -
     ood = logd[logd["set"] == "ood"]
 
     comp_rows = []
-    for label, grp in [("IID series", iid), ("OOD series", ood)]:
+    for label, grp in [("ID series", iid), ("OOD series", ood)]:
         for k in patts:
             comp_rows.append({"series": label, "motif": k, "prevalence": float(grp[k].mean()), "n": len(grp)})
     comp_df = pd.DataFrame(comp_rows)
 
     arom_nonpyr = ood["aromatic_amine"] & ~ood["aminopyridine"]
     bias_df = pd.DataFrame([
-        {"group": "IID (all)", "bias": float(iid["signed"].mean()), "n": len(iid)},
+        {"group": "ID (all)", "bias": float(iid["signed"].mean()), "n": len(iid)},
         {"group": "OOD amino-pyridine", "bias": float(ood.loc[ood["aminopyridine"], "signed"].mean()),
          "n": int(ood["aminopyridine"].sum())},
         {"group": "OOD aromatic amine\n(non-pyridine)", "bias": float(ood.loc[arom_nonpyr, "signed"].mean()),
@@ -284,7 +284,7 @@ def analyze_amine_pka_logd(errors_df: pd.DataFrame, model_dir: Path, dpi: int) -
     motifs = list(patts)
     x = np.arange(len(motifs))
     width = 0.38
-    for i, (label, color) in enumerate([("IID series", "steelblue"), ("OOD series", "coral")]):
+    for i, (label, color) in enumerate([("ID series", "steelblue"), ("OOD series", "coral")]):
         vals = [comp_df[(comp_df["series"] == label) & (comp_df["motif"] == m)]["prevalence"].iloc[0] * 100
                 for m in motifs]
         axes[0].bar(x + (i - 0.5) * width, vals, width, label=label, color=color, edgecolor="white")
@@ -293,7 +293,7 @@ def analyze_amine_pka_logd(errors_df: pd.DataFrame, model_dir: Path, dpi: int) -
     axes[0].set_ylabel("% of LogD-assayed molecules")
     axes[0].set_ylim(0, 100)
     axes[0].legend(frameon=True)
-    axes[0].set_title("Amine composition: IID vs OOD series", fontsize=11)
+    axes[0].set_title("Amine composition: ID vs OOD series", fontsize=11)
 
     bar_colors = ["steelblue", "coral", "coral", "coral"]
     axes[1].bar(np.arange(len(bias_df)), bias_df["bias"], color=bar_colors, edgecolor="white")
@@ -344,7 +344,7 @@ def _generate_figures(errors_df: pd.DataFrame, metrics_df: pd.DataFrame,
         bins = np.logspace(np.log10(lo), np.log10(hi), 40)
 
         ax.hist(iid_se, bins=bins, density=True, alpha=0.6, color="steelblue",
-                label=f"IID (med={np.median(iid_se):.3f})", edgecolor="white")
+                label=f"ID (med={np.median(iid_se):.3f})", edgecolor="white")
         ax.hist(ood_se, bins=bins, density=True, alpha=0.6, color="coral",
                 label=f"OOD (med={np.median(ood_se):.3f})", edgecolor="white")
 
@@ -357,13 +357,13 @@ def _generate_figures(errors_df: pd.DataFrame, metrics_df: pd.DataFrame,
     for i in range(n_ep, len(axes)):
         axes[i].set_visible(False)
 
-    fig.suptitle("IID vs OOD squared error distributions", fontsize=14, y=1.01)
+    fig.suptitle("ID vs OOD squared error distributions", fontsize=14, y=1.01)
     fig.tight_layout()
     fig.savefig(model_dir / "squared_error_distributions.png", dpi=dpi, bbox_inches="tight")
     logger.info("Saved squared_error_distributions.png")
     plt.close("all")
 
-    # Figure B: Per-metric IID vs OOD bar charts
+    # Figure B: Per-metric ID vs OOD bar charts
     x = np.arange(len(active_endpoints))
     width = 0.35
 
@@ -387,7 +387,7 @@ def _generate_figures(errors_df: pd.DataFrame, metrics_df: pd.DataFrame,
             iid_vals.append(iid_row[col].values[0])
             ood_vals.append(ood_row[col].values[0])
 
-        ax.bar(x - width / 2, iid_vals, width, label="IID",
+        ax.bar(x - width / 2, iid_vals, width, label="ID",
                color="steelblue", edgecolor="white", alpha=0.8)
         ax.bar(x + width / 2, ood_vals, width, label="OOD",
                color="coral", edgecolor="white", alpha=0.8)
@@ -395,7 +395,7 @@ def _generate_figures(errors_df: pd.DataFrame, metrics_df: pd.DataFrame,
         ax.set_xticks(x)
         ax.set_xticklabels(active_endpoints, rotation=45, ha="right", fontsize=8)
         ax.set_ylabel(ylabel)
-        ax.set_title(f"IID vs OOD {ylabel} by endpoint")
+        ax.set_title(f"ID vs OOD {ylabel} by endpoint")
         ax.legend()
         if col in ("r2",):
             ax.axhline(y=0, color="gray", linestyle="--", alpha=0.3)
@@ -439,7 +439,7 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
             )
             logger.info(f"Saved {fname}_{set_label}_comparison.png")
 
-    # ── Combined IID vs OOD squared error distribution figure ─────────────
+    # ── Combined ID vs OOD squared error distribution figure ─────────────
     xgb_errors_path = output_dir / "xgboost" / "iid_vs_ood_errors.csv"
     cm_errors_path = output_dir / "chemeleon" / "iid_vs_ood_errors.csv"
     if xgb_errors_path.exists() and cm_errors_path.exists():
@@ -497,7 +497,7 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
         axes[0].set_ylabel("Squared error")
 
         from matplotlib.patches import Patch
-        axes[1].legend(handles=[Patch(facecolor="steelblue", alpha=0.7, label="IID (within-series)"),
+        axes[1].legend(handles=[Patch(facecolor="steelblue", alpha=0.7, label="ID (within-series)"),
                                 Patch(facecolor="coral", alpha=0.7, label="OOD (cross-series)")],
                        loc="lower left")
 
@@ -515,7 +515,7 @@ def main(
         PROCESSED_DATA_DIR / "2.09-seal-iid-vs-ood-series", help="Output directory"
     ),
     dpi: int = typer.Option(DEFAULT_DPI, help="DPI for saved figures"),
-    train_frac: float = typer.Option(0.8, help="Fraction of largest cluster for training (rest = IID val)"),
+    train_frac: float = typer.Option(0.8, help="Fraction of largest cluster for training (rest = ID val)"),
     model: str = typer.Option("xgboost", help="Model architecture: xgboost or chemeleon"),
     combined: bool = typer.Option(False, help="Generate combined XGBoost+CheMeleon comparison figures"),
 ) -> None:
@@ -576,7 +576,7 @@ def main(
     series_a = df[df["cluster_id"] == largest_cid].copy()
     series_b = df[df["cluster_id"] == second_cid].copy()
 
-    # ── 3. Time-split cluster A into train + IID validation ───────────
+    # ── 3. Time-split cluster A into train + ID validation ───────────
     series_a = series_a.sort_values("mol_index")
     n_train = int(len(series_a) * train_frac)
     train_df = series_a.iloc[:n_train].copy()
@@ -587,7 +587,7 @@ def main(
     iid_df["set"] = "iid"
     ood_df["set"] = "ood"
 
-    logger.info(f"Train: {len(train_df)}, IID val: {len(iid_df)}, OOD test: {len(ood_df)}")
+    logger.info(f"Train: {len(train_df)}, ID val: {len(iid_df)}, OOD test: {len(ood_df)}")
 
     # ── 4. Distance characterization ──────────────────────────────────
     train_dist_idx = np.array([name_to_dist_idx[n] for n in train_df["Molecule Name"]])
@@ -600,7 +600,7 @@ def main(
     iid_nn1 = iid_to_train.min(axis=1)
     ood_nn1 = ood_to_train.min(axis=1)
 
-    logger.info(f"IID 1-NN median: {np.median(iid_nn1):.3f}, OOD 1-NN median: {np.median(ood_nn1):.3f}")
+    logger.info(f"ID 1-NN median: {np.median(iid_nn1):.3f}, OOD 1-NN median: {np.median(ood_nn1):.3f}")
 
     # Save split summary (model-agnostic)
     split_summary = pd.DataFrame([
@@ -617,12 +617,12 @@ def main(
     fig, ax = plt.subplots(figsize=(8, 5))
     bins = np.linspace(0, 1, 51)
     ax.hist(iid_nn1, bins=bins, density=True, alpha=0.6, color="steelblue",
-            label=f"IID (med={np.median(iid_nn1):.3f})", edgecolor="white")
+            label=f"ID (med={np.median(iid_nn1):.3f})", edgecolor="white")
     ax.hist(ood_nn1, bins=bins, density=True, alpha=0.6, color="coral",
             label=f"OOD (med={np.median(ood_nn1):.3f})", edgecolor="white")
     ax.set_xlabel("Test-to-train 1-NN Tanimoto distance")
     ax.set_ylabel("Density")
-    ax.set_title("Structural distance to training set: IID vs OOD")
+    ax.set_title("Structural distance to training set: ID vs OOD")
     ax.legend()
     fig.tight_layout()
     fig.savefig(output_dir / "distance_characterization.png", dpi=dpi, bbox_inches="tight")
@@ -727,7 +727,7 @@ def main(
             iid_prot = [all_iid_prot[i] for i in np.where(iid_mask)[0]]
             ood_prot = [all_ood_prot[i] for i in np.where(ood_mask)[0]]
 
-            # Train once, predict on concatenated IID+OOD test set, then split.
+            # Train once, predict on concatenated ID+OOD test set, then split.
             combined_prot = iid_prot + ood_prot
             combined_preds = train_chemeleon(
                 train_prot, y_tr, combined_prot,

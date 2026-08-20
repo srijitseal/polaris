@@ -12,6 +12,7 @@ Outputs:
     data/processed/2.06-seal-split-quality/fold_sizes_comparison.png
     data/processed/2.06-seal-split-quality/target_distributions_by_strategy.png
     data/processed/2.06-seal-split-quality/distance_distributions_by_strategy.png
+    data/processed/2.06-seal-split-quality/per_fold_distance_distributions.png
     data/processed/2.06-seal-split-quality/structural_overlap.png
     data/processed/2.06-seal-split-quality/umap_by_strategy.png
     data/processed/2.06-seal-split-quality/split_quality_summary.csv
@@ -128,6 +129,37 @@ def plot_distance_distributions(strategy_nn1: dict, colors: dict, output_dir: Pa
     fig.tight_layout()
     fig.savefig(output_dir / "distance_distributions_by_strategy.png", dpi=dpi, bbox_inches="tight")
     logger.info("Saved distance_distributions_by_strategy.png")
+    plt.close("all")
+
+
+def plot_per_fold_distance_distributions(
+    strategy_fold_nn1: dict, output_dir: Path, dpi: int
+) -> None:
+    """Per-fold test-to-train 1-NN distributions, one panel per splitting strategy.
+
+    Complements the pooled view: pooling hides whether a strategy's separation is
+    uniform across folds or driven by one extreme fold.
+    """
+    panels = [("cluster", "Cluster-split"), ("time", "Time-split"), ("target", "Target-split")]
+    fig, axes = plt.subplots(1, 3, figsize=(19, 4.8))
+
+    for ax, (strat_name, panel_title) in zip(axes, panels):
+        fold_nn1s = strategy_fold_nn1[strat_name]
+        cmap = plt.cm.Set2(np.linspace(0, 1, max(len(fold_nn1s), 3)))
+        for fold_id, nn1 in enumerate(fold_nn1s):
+            weights = np.ones_like(nn1) / len(nn1)
+            ax.hist(nn1, bins=50, weights=weights, alpha=0.55, color=cmap[fold_id],
+                    edgecolor="white", linewidth=0.4,
+                    label=f"Fold {fold_id} (n={len(nn1)}, med={np.median(nn1):.3f})")
+        ax.set_xlabel("Test-to-train 1-NN Jaccard distance", fontsize=12)
+        ax.set_ylabel("Relative frequency", fontsize=12)
+        ax.set_title(panel_title, fontweight="bold", fontsize=13)
+        ax.tick_params(labelsize=11)
+        ax.legend(fontsize=9, frameon=True)
+
+    fig.tight_layout()
+    fig.savefig(output_dir / "per_fold_distance_distributions.png", dpi=dpi, bbox_inches="tight")
+    logger.info("Saved per_fold_distance_distributions.png")
     plt.close("all")
 
 
@@ -461,6 +493,18 @@ def main(
         nn1_data = np.load(output_dir / "strategy_nn1.npz")
         strategy_nn1 = {k: nn1_data[k] for k in nn1_data}
         plot_distance_distributions(strategy_nn1, colors, output_dir, dpi)
+
+        fold_path = output_dir / "strategy_fold_nn1.npz"
+        if fold_path.exists():
+            fold_data = np.load(fold_path)
+            strategy_fold_nn1 = {}
+            for key in fold_data.files:
+                strat, idx = key.rsplit("_", 1)
+                strategy_fold_nn1.setdefault(strat, {})[int(idx)] = fold_data[key]
+            strategy_fold_nn1 = {k: [v[i] for i in sorted(v)] for k, v in strategy_fold_nn1.items()}
+            plot_per_fold_distance_distributions(strategy_fold_nn1, output_dir, dpi)
+        else:
+            logger.warning("strategy_fold_nn1.npz missing; run without --figures-only once")
         logger.info("Figures regenerated (no data recomputed)")
         return
 
@@ -566,6 +610,7 @@ def main(
     # ── 4. Check 3: Test-to-train 1-NN distances ─────────────────────
     summary_rows = []
     strategy_nn1 = {}
+    strategy_fold_nn1 = {}
 
     for strat_name, strat in strategies.items():
         fold_ids = strat["fold_ids"]
@@ -601,14 +646,20 @@ def main(
             fold_nn1s.append(nn1)
 
         strategy_nn1[strat_name] = np.concatenate(fold_nn1s)
+        strategy_fold_nn1[strat_name] = fold_nn1s
 
     # Save pooled distances for figures-only mode
     np.savez(output_dir / "strategy_nn1.npz",
              cluster=strategy_nn1["cluster"],
              time=strategy_nn1["time"],
              target=strategy_nn1["target"])
+    # Save per-fold distances too (ragged, so one key per strategy/fold)
+    np.savez(output_dir / "strategy_fold_nn1.npz",
+             **{f"{k}_{i}": arr for k, folds in strategy_fold_nn1.items()
+                for i, arr in enumerate(folds)})
 
     plot_distance_distributions(strategy_nn1, colors, output_dir, dpi)
+    plot_per_fold_distance_distributions(strategy_fold_nn1, output_dir, dpi)
 
     # ── 5. Check 4: Structural overlap ────────────────────────────────
     summary_df = pd.DataFrame(summary_rows)

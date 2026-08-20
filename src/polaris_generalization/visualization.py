@@ -23,7 +23,7 @@ def plot_model_comparison_bars(
     endpoint_col: str,
     metric_col: str,
     ylabel: str,
-    title: str,
+    title: str | None,
     output_path: Path,
     dpi: int = DEFAULT_DPI,
 ) -> None:
@@ -34,7 +34,9 @@ def plot_model_comparison_bars(
     data_by_model : {"xgboost": df, "chemeleon": df} where each df has endpoint_col and metric_col
     endpoint_col : column name for x-axis grouping (e.g. "endpoint")
     metric_col : column name for bar height (e.g. "r2")
-    ylabel, title : axis labels
+    ylabel : y-axis label
+    title : axis title; pass None to omit it (publication figures carry their
+        description in the caption rather than an in-figure title)
     output_path : where to save the figure
     """
     model_names = list(data_by_model.keys())
@@ -72,7 +74,8 @@ def plot_model_comparison_bars(
     ax.set_xticks(x)
     ax.set_xticklabels(endpoints, rotation=45, ha="right", fontsize=8)
     ax.set_ylabel(ylabel)
-    ax.set_title(title)
+    if title:
+        ax.set_title(title)
     ax.legend()
     fig.tight_layout()
     fig.savefig(output_path, dpi=dpi, bbox_inches="tight")

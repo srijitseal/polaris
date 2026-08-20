@@ -339,8 +339,8 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
             ("rae", "RAE", "rae"),
         ]:
             plot_model_comparison_bars(
-                data_by_model, "endpoint", metric, ylabel,
-                f"{ylabel} — XGBoost vs CheMeleon ({set_label})",
+                data_by_model, "endpoint", metric, f"{ylabel} ({set_label})",
+                None,  # described in the figure caption, not in the panel
                 combined_dir / f"{fname}_{fname_label}_comparison.png", dpi=dpi,
             )
             logger.info(f"Saved {fname}_{fname_label}_comparison.png")

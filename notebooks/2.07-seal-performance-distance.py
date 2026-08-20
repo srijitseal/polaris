@@ -479,16 +479,38 @@ def _generate_combined_figures(output_dir: Path, dpi: int) -> None:
                     valid = ~np.isnan(median_vals)
                     c_arr = np.array(centers)
                     ax.plot(c_arr[valid], median_vals[valid], color=strat_colors[strat_name],
-                            linestyle=ls, linewidth=1.8,
-                            label=f"{strat_name} ({model_label})")
+                            linestyle=ls, linewidth=3.0, solid_capstyle="round",
+                            label=f"{strat_name.capitalize()} ({model_label})")
 
-            ax.set_xlabel(xlabel)
-            ax.set_ylabel("RMSE")
-            ax.set_title(ep, fontweight="bold")
-            ax.legend(fontsize=6)
+            ax.set_xlabel(xlabel, fontsize=15)
+            ax.set_ylabel("RMSE", fontsize=15)
+            ax.set_title(ep, fontweight="bold", fontsize=17)
+            ax.tick_params(labelsize=13)
+
+        # Single shared legend: the curves are the same six series in every panel,
+        # so one large legend in the unused grid slot beats nine unreadable ones.
+        handles, labels = axes[0].get_legend_handles_labels()
+        seen, uniq_h, uniq_l = set(), [], []
+        for h, lab in zip(handles, labels):
+            if lab not in seen:
+                seen.add(lab)
+                uniq_h.append(h)
+                uniq_l.append(lab)
 
         for i in range(n_ep, len(axes)):
             axes[i].set_visible(False)
+
+        if n_ep < len(axes):
+            legend_ax = axes[n_ep]
+            legend_ax.set_visible(True)
+            legend_ax.axis("off")
+            legend_ax.legend(uniq_h, uniq_l, loc="center", fontsize=22,
+                             frameon=False, handlelength=3.5, labelspacing=1.0,
+                             title="Splitting strategy (model)", title_fontsize=24)
+        else:
+            fig.legend(uniq_h, uniq_l, loc="lower center", ncol=3, fontsize=22,
+                       frameon=False, handlelength=3.5)
+
         fig.tight_layout()
         fig.savefig(combined_dir / fname, dpi=dpi, bbox_inches="tight")
         plt.close("all")
